@@ -1,0 +1,362 @@
+//! Frameless window chrome: a Chromium-style tab strip that doubles as the title bar.
+//!
+//! The strip hosts the four page tabs (FBC, Retic, PT / APTT, Dilution), a drag area and the
+//! minimize / maximize / close buttons. Thin invisible bands along the window edges start a
+//! native resize via `ViewportCommand::BeginResize`.
+use crate::app::{App, Tab};
+use crate::theme::{hex, rgba, Palette, Role, Theme};
+use crate::ui::*;
+use eframe::egui::epaint::StrokeKind;
+use eframe::egui::{
+    self, pos2, vec2, Align2, Color32, CornerRadius, Id, Rect, ResizeDirection, Response, Sense,
+    Stroke, Ui,
+};
+
+pub const CHROME_H: f32 = 44.0;
+const TAB_H: f32 = 36.0;
+const TAB_PAD: f32 = 20.0;
+const TAB_GAP: f32 = 4.0;
+const TAB_FONT: f32 = 14.5;
+const BTN_W: f32 = 46.0;
+const CLOSE_W: f32 = 62.0;
+const EDGE: f32 = 4.0;
+const CORNER: f32 = 10.0;
+
+const TABS: [(Tab, &str); 4] = [
+    (Tab::Fbc, "FBC"),
+    (Tab::Retic, "Retic"),
+    (Tab::PtAptt, "PT / APTT"),
+    (Tab::Dilution, "Dilution"),
+];
+
+/// Draw the title bar. Must be called before the central panel.
+pub fn title_bar(app: &mut App, ctx: &egui::Context) {
+    let th = app.theme();
+    egui::TopBottomPanel::top("window-chrome")
+        .exact_height(CHROME_H)
+        .show_separator_line(false)
+        .frame(egui::Frame::NONE.fill(strip_bg(&th)))
+        .show(ctx, |ui| paint_chrome(ui, app, &th));
+}
+
+struct TabDraw {
+    rect: Rect,
+    idx: usize,
+    hovered: bool,
+    active: bool,
+}
+
+fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
+    let rect = ui.max_rect();
+    let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+    let p = ui.painter().clone();
+    let tab_top = rect.bottom() - TAB_H;
+
+    // --- tabs (centred, with generous hit targets) -----------------------
+    let widths: Vec<f32> = TABS
+        .iter()
+        .map(|(_, label)| text_width(ui, th, label, Role::SansB, TAB_FONT).ceil() + TAB_PAD * 2.0)
+        .collect();
+    let total_w = widths.iter().sum::<f32>() + TAB_GAP * (TABS.len() - 1) as f32;
+    let controls_left = rect.right() - (CLOSE_W + BTN_W * 2.0);
+    let min_x = rect.left() + 12.0;
+    let max_x = (controls_left - total_w - 12.0).max(min_x);
+    let mut x = (rect.center().x - total_w / 2.0).clamp(min_x, max_x);
+
+    let mut draws: Vec<TabDraw> = Vec::with_capacity(TABS.len());
+    for (i, (tab, _label)) in TABS.iter().enumerate() {
+        let w = widths[i];
+        let r = Rect::from_min_size(pos2(x, tab_top), vec2(w, TAB_H));
+        let resp = ui.interact(r, Id::new(("chrome-tab", i)), Sense::click());
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() {
+            app.tab = *tab;
+        }
+        draws.push(TabDraw { rect: r, idx: i, hovered: resp.hovered(), active: app.tab == *tab });
+        x += w + TAB_GAP;
+    }
+    let tabs_right = x;
+
+    let corners = tab_corners(th);
+    for d in draws.iter().filter(|d| !d.active && d.hovered) {
+        p.rect_filled(d.rect, corners, hover_bg(th));
+    }
+
+    // separator under the strip, interrupted where the active tab opens into the page
+    let (sep_w, sep_c) = match th.palette {
+        Palette::Pokemon => (2.0, rgba(th.ring, 0.35)),
+        Palette::Genshin => (1.0, rgba(th.gold, 0.45)),
+        Palette::Default => (1.0, th.line),
+    };
+    let sep_y = rect.bottom() - sep_w / 2.0;
+    let active_rect = draws.iter().find(|d| d.active).map(|d| d.rect);
+    let spans: Vec<(f32, f32)> = match active_rect {
+        Some(r) => vec![(rect.left(), r.left()), (r.right(), rect.right())],
+        None => vec![(rect.left(), rect.right())],
+    };
+    for (x0, x1) in spans {
+        if x1 > x0 {
+            p.line_segment([pos2(x0, sep_y), pos2(x1, sep_y)], Stroke::new(sep_w, sep_c));
+        }
+    }
+
+    // active tab: page-coloured, rounded top, open at the bottom
+    if let Some(r) = active_rect {
+        let fill = if th.palette == Palette::Pokemon { th.surface } else { th.bg };
+        p.rect_filled(r, corners, fill);
+        let (rad, bw) = if th.palette == Palette::Pokemon { (14.0, 2.0) } else { (8.0, 1.0) };
+        p.add(tab_outline(r, rad, Stroke::new(bw, tab_border(th))));
+        match th.palette {
+            Palette::Genshin => {
+                p.line_segment(
+                    [pos2(r.left() + 10.0, r.top() + 1.5), pos2(r.right() - 10.0, r.top() + 1.5)],
+                    Stroke::new(2.0_f32, th.gold),
+                );
+            }
+            Palette::Pokemon => {
+                // friendly red tick, inset from the rounded corners
+                p.line_segment(
+                    [pos2(r.left() + 16.0, r.top() + 3.0), pos2(r.right() - 16.0, r.top() + 3.0)],
+                    Stroke::new(3.0_f32, th.accent),
+                );
+            }
+            Palette::Default => {}
+        }
+    }
+
+    // labels on top of every fill
+    for d in &draws {
+        let c = if d.active || d.hovered {
+            th.text
+        } else if th.palette == Palette::Genshin && !th.dark {
+            hex(0x454f68)
+        } else {
+            th.muted
+        };
+        text(ui, th, d.rect.center(), Align2::CENTER_CENTER, TABS[d.idx].1, Role::SansB, TAB_FONT, c);
+    }
+
+    // --- window buttons --------------------------------------------------
+    let btn_top = rect.top();
+    let close = Rect::from_min_max(pos2(rect.right() - CLOSE_W, btn_top), pos2(rect.right(), btn_top + CHROME_H));
+    let maximize = Rect::from_min_max(pos2(close.left() - BTN_W, btn_top), pos2(close.left(), btn_top + CHROME_H));
+    let minimize = Rect::from_min_max(pos2(maximize.left() - BTN_W, btn_top), pos2(maximize.left(), btn_top + CHROME_H));
+    let min_resp = caption(ui, th, minimize, "min", Caption::Minimize);
+    let max_resp = caption(ui, th, maximize, "max", if maximized { Caption::Restore } else { Caption::Maximize });
+    let close_resp = caption(ui, th, close, "close", Caption::Close);
+    if min_resp.clicked() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+    }
+    if max_resp.clicked() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+    }
+    if close_resp.clicked() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    // --- drag areas (either side of the centred tab group) ---------------
+    let first_tab = draws.first().map(|d| d.rect.left()).unwrap_or(rect.left());
+    let drag_rects = [
+        (Id::new("chrome-drag-left"), Rect::from_min_max(pos2(rect.left(), rect.top()), pos2(first_tab, rect.bottom()))),
+        (Id::new("chrome-drag"), Rect::from_min_max(pos2(tabs_right, rect.top()), pos2(minimize.left(), rect.bottom()))),
+    ];
+    for (id, drag_rect) in drag_rects {
+        if drag_rect.width() <= 0.0 {
+            continue;
+        }
+        let drag = ui.interact(drag_rect, id, Sense::click_and_drag());
+        if drag.drag_started_by(egui::PointerButton::Primary) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+        if drag.double_clicked() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+        }
+    }
+
+    resize_edges(ui, "top", true);
+}
+
+// ---------------------------------------------------------------------------
+// Window controls
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Caption {
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
+
+fn caption(ui: &mut Ui, th: &Theme, rect: Rect, id: &'static str, kind: Caption) -> Response {
+    let resp = ui.interact(rect, Id::new(("chrome-btn", id)), Sense::click());
+    let hovered = resp.hovered();
+    let pressed = resp.is_pointer_button_down_on();
+    let p = ui.painter();
+    let bg = if hovered || pressed {
+        let c = match kind {
+            Caption::Close => {
+                if pressed {
+                    hex(0xa8281b)
+                } else {
+                    hex(0xc42b1c)
+                }
+            }
+            _ => match th.palette {
+                Palette::Genshin => rgba(hex(0xcbba8c), if pressed { 0.28 } else { 0.16 }),
+                Palette::Pokemon => rgba(th.text, if pressed { 0.16 } else { 0.08 }),
+                Palette::Default => rgba(th.text, if pressed { 0.14 } else { 0.075 }),
+            },
+        };
+        p.rect_filled(rect, 0.0, c);
+        Some(c)
+    } else {
+        None
+    };
+    let fg = match kind {
+        Caption::Close if hovered || pressed => Color32::WHITE,
+        _ => th.text,
+    };
+    let c = rect.center();
+    let s = 5.0;
+    let stroke = Stroke::new(1.0_f32, fg);
+    match kind {
+        Caption::Minimize => {
+            p.line_segment([pos2(c.x - s, c.y + 0.5), pos2(c.x + s, c.y + 0.5)], stroke);
+        }
+        Caption::Maximize => {
+            p.rect_stroke(
+                Rect::from_center_size(c, vec2(s * 2.0, s * 2.0)),
+                CornerRadius::same(1),
+                stroke,
+                StrokeKind::Inside,
+            );
+        }
+        Caption::Restore => {
+            let back = Rect::from_min_size(pos2(c.x - 5.0, c.y - 5.0), vec2(8.0, 8.0));
+            let front = back.translate(vec2(2.0, 2.0));
+            p.rect_stroke(back, 0.0, stroke, StrokeKind::Inside);
+            p.rect_filled(front.shrink(1.0), 0.0, bg.unwrap_or(th.bg));
+            p.rect_stroke(front, 0.0, stroke, StrokeKind::Inside);
+        }
+        Caption::Close => {
+            p.line_segment([pos2(c.x - s, c.y - s), pos2(c.x + s, c.y + s)], stroke);
+            p.line_segment([pos2(c.x - s, c.y + s), pos2(c.x + s, c.y - s)], stroke);
+        }
+    }
+    let tip = match kind {
+        Caption::Minimize => "Minimize",
+        Caption::Maximize => "Maximize",
+        Caption::Restore => "Restore down",
+        Caption::Close => "Close",
+    };
+    resp.on_hover_text(tip)
+}
+
+// ---------------------------------------------------------------------------
+// Edge resizing (the window is frameless, so egui must start the OS resize)
+// ---------------------------------------------------------------------------
+
+fn resize_edges(ui: &mut Ui, tag: &'static str, top: bool) {
+    let ctx = ui.ctx().clone();
+    if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+        return;
+    }
+    let w = ctx.screen_rect();
+    let (l, t, r, b) = (w.left(), w.top(), w.right(), w.bottom());
+    let parts: [(&'static str, Rect, ResizeDirection, egui::CursorIcon); 5] = if top {
+        [
+            ("n", Rect::from_min_max(pos2(l + CORNER, t), pos2(r - CORNER, t + EDGE)), ResizeDirection::North, egui::CursorIcon::ResizeVertical),
+            ("w", Rect::from_min_max(pos2(l, t + CORNER), pos2(l + EDGE, b - CORNER)), ResizeDirection::West, egui::CursorIcon::ResizeHorizontal),
+            ("e", Rect::from_min_max(pos2(r - EDGE, t + CORNER), pos2(r, b - CORNER)), ResizeDirection::East, egui::CursorIcon::ResizeHorizontal),
+            ("nw", Rect::from_min_max(pos2(l, t), pos2(l + CORNER, t + CORNER)), ResizeDirection::NorthWest, egui::CursorIcon::ResizeNwSe),
+            ("ne", Rect::from_min_max(pos2(r - CORNER, t), pos2(r, t + CORNER)), ResizeDirection::NorthEast, egui::CursorIcon::ResizeNeSw),
+        ]
+    } else {
+        [
+            ("s", Rect::from_min_max(pos2(l + CORNER, b - EDGE), pos2(r - CORNER, b)), ResizeDirection::South, egui::CursorIcon::ResizeVertical),
+            ("w", Rect::from_min_max(pos2(l, t + CORNER), pos2(l + EDGE, b - CORNER)), ResizeDirection::West, egui::CursorIcon::ResizeHorizontal),
+            ("e", Rect::from_min_max(pos2(r - EDGE, t + CORNER), pos2(r, b - CORNER)), ResizeDirection::East, egui::CursorIcon::ResizeHorizontal),
+            ("sw", Rect::from_min_max(pos2(l, b - CORNER), pos2(l + CORNER, b)), ResizeDirection::SouthWest, egui::CursorIcon::ResizeNeSw),
+            ("se", Rect::from_min_max(pos2(r - CORNER, b - CORNER), pos2(r, b)), ResizeDirection::SouthEast, egui::CursorIcon::ResizeNwSe),
+        ]
+    };
+    let clip = ui.clip_rect();
+    for (name, rect, dir, cursor) in parts {
+        let r = rect.intersect(clip);
+        if r.width() < 1.0 || r.height() < 1.0 {
+            continue;
+        }
+        let resp = ui.interact(r, Id::new(("win-resize", tag, name)), Sense::click_and_drag());
+        if resp.hovered() {
+            ctx.set_cursor_icon(cursor);
+            if ctx.input(|i| i.pointer.primary_pressed()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+            }
+        }
+    }
+}
+
+/// Called from the central panel, after its content, so edge bands win hit-testing.
+pub fn resize_frame(ui: &mut Ui) {
+    resize_edges(ui, "frame", false);
+}
+
+// ---------------------------------------------------------------------------
+// Palette bits
+// ---------------------------------------------------------------------------
+
+fn strip_bg(th: &Theme) -> Color32 {
+    match (th.palette, th.dark) {
+        (Palette::Genshin, false) => hex(0xd3cbbb),
+        (Palette::Genshin, true) => hex(0x2f3a4c),
+        (Palette::Default, true) => hex(0x1f1f1d),
+        _ => th.surface2,
+    }
+}
+
+fn hover_bg(th: &Theme) -> Color32 {
+    match th.palette {
+        Palette::Genshin => rgba(th.gold, 0.16),
+        Palette::Pokemon => th.secondary,
+        Palette::Default => rgba(th.text, 0.07),
+    }
+}
+
+fn tab_border(th: &Theme) -> Color32 {
+    match th.palette {
+        Palette::Genshin => rgba(th.gold, 0.55),
+        Palette::Pokemon => th.ring,
+        Palette::Default => th.line,
+    }
+}
+
+fn tab_corners(th: &Theme) -> CornerRadius {
+    let r = if th.palette == Palette::Pokemon { 14 } else { 8 };
+    CornerRadius { nw: r, ne: r, sw: 0, se: 0 }
+}
+
+/// Rounded-top outline that is open at the bottom (a tab silhouette).
+fn tab_outline(r: Rect, radius: f32, stroke: Stroke) -> egui::Shape {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let rad = radius.min(r.width() / 2.0).min(r.height());
+    let mut pts = vec![pos2(r.left(), r.bottom())];
+    if rad > 0.5 {
+        let steps = 6;
+        for i in 0..=steps {
+            let a = PI + i as f32 / steps as f32 * FRAC_PI_2;
+            pts.push(pos2(r.left() + rad + a.cos() * rad, r.top() + rad + a.sin() * rad));
+        }
+        for i in 0..=steps {
+            let a = -FRAC_PI_2 + i as f32 / steps as f32 * FRAC_PI_2;
+            pts.push(pos2(r.right() - rad + a.cos() * rad, r.top() + rad + a.sin() * rad));
+        }
+    } else {
+        pts.push(pos2(r.left(), r.top()));
+        pts.push(pos2(r.right(), r.top()));
+    }
+    pts.push(pos2(r.right(), r.bottom()));
+    egui::Shape::line(pts, stroke)
+}

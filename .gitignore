@@ -1,0 +1,17 @@
+# Rust build output and local toolchain artifacts
+/target/
+
+# Built executables / symbols. The release EXE is attached to the GitHub
+# release instead of being committed (see RELEASING.md).
+*.exe
+*.pdb
+*.dSYM/
+
+# Large captured design references. They are not needed to build the app and
+# can be re-downloaded from Game UI Database when regenerating backdrops.
+*.mhtml
+
+# OS / editor noise
+Thumbs.db
+desktop.ini
+.DS_Store

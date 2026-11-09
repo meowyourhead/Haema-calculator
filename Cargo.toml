@@ -1,0 +1,26 @@
+[package]
+name = "haematology_calculator"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+eframe = { version = "0.31.1", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+
+[features]
+# Developer-only: HAEM_SHOT=<file.png> renders one frame to a PNG and exits.
+screenshot = ["dep:image"]
+
+[build-dependencies]
+# Embeds the fox icon (and version strings) into the .exe on Windows.
+winresource = "0.1"
+
+[dev-dependencies]
+# Used by examples/fontcheck.rs to validate the bundled TTFs.
+ab_glyph = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
