@@ -435,7 +435,8 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
     let p = ui.painter();
     let off = if pressed { 1.0 } else { 0.0 };
     let rect = rect.translate(vec2(0.0, off));
-    let dim = |c: Color32| if enabled { c } else { rgba(c, 0.45 * (c.a() as f32 / 255.0)) };
+    // Disabled controls stay legible (they still say what they would do).
+    let dim = |c: Color32| if enabled { c } else { rgba(c, 0.75 * (c.a() as f32 / 255.0)) };
 
     let (mut bg, mut border, mut fg, mut radius) = match kind {
         Btn::Primary => (if hovered { th.accent_dark } else { th.accent }, Color32::TRANSPARENT, th.on_accent, th.radius),
@@ -635,8 +636,25 @@ pub fn label(ui: &Ui, th: &Theme, pos: Pos2, s: &str) {
     }
 }
 
+/// How a number field should draw attention to itself.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FieldState {
+    Normal,
+    /// The text is not a usable number.
+    Invalid,
+    /// The number parses but is the run that disagrees with the others.
+    Flagged,
+}
+
 /// Number field at an exact rectangle. Returns whether the text changed.
 pub fn field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hint: &str, invalid: bool) -> bool {
+    field_s(ui, th, rect, id, value, hint, if invalid { FieldState::Invalid } else { FieldState::Normal })
+}
+
+/// `field` with an explicit attention state.
+pub fn field_s(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hint: &str, state: FieldState) -> bool {
+    let invalid = state == FieldState::Invalid;
+    let flagged = state == FieldState::Flagged;
     // Record every field in draw order so Tab / Enter can walk them predictably.
     ui.ctx().data_mut(|d| {
         d.get_temp_mut_or_default::<Vec<(Id, Rect)>>(Id::new("haem-field-order"))
@@ -655,7 +673,8 @@ pub fn field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hi
     let cyber = th.palette == Palette::Cyberpunk;
     let gen = th.palette == Palette::Genshin;
     let r = if pk { 12.0 } else if cyber { 0.0 } else if gen { pill() } else { th.radius };
-    let (mut bg, mut border) = if focused { (th.surface, th.accent) } else { (th.bg, th.line_strong) };
+    // Focus uses the palette's info hue, never the accent (which reads as a flag).
+    let (mut bg, mut border) = if focused { (th.surface, th.ring) } else { (th.bg, th.line_strong) };
     // Genshin entry boxes are the bright ivory capsule of "Edit Nickname":
     // ivory on parchment, cream on the slate screens, slate ink in both.
     let mut ink = th.text;
@@ -678,12 +697,18 @@ pub fn field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hi
         border = th.bad;
         bg = th.bad_bg;
     }
+    // Genshin's ivory capsules need a deep red; the dark palette's pastel flag
+    // colour would vanish against them.
+    let flag_c = if gen { crate::theme::hex(0xb03a30) } else { th.bad };
+    if flagged {
+        border = flag_c;
+    }
     if focused {
         let ring = match th.palette {
-            Palette::Genshin => rgba(th.gold, 0.45),
-            Palette::Pokemon => rgba(th.ring, 0.30),
-            Palette::Cyberpunk => rgba(th.ring, 0.30),
-            _ => rgba(th.ring, 0.25),
+            Palette::Genshin => rgba(th.gold, 0.65),
+            Palette::Pokemon => rgba(th.ring, 0.42),
+            Palette::Cyberpunk => rgba(th.ring, 0.42),
+            _ => rgba(th.ring, 0.40),
         };
         if cyber {
             p.add(Shape::closed_line(chamfer_points(rect.expand(2.0), 6.0), Stroke::new(3.0, ring)));
@@ -717,11 +742,17 @@ pub fn field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hi
                 Stroke::new(1.0, Color32::from_black_alpha(18)),
             );
         }
-        stroke_in(&p, rect, r, if pk { 1.5 } else { 1.0 }, border);
+        stroke_in(&p, rect, r, if flagged { 2.0 } else if pk { 1.5 } else { 1.0 }, border);
+    }
+    let mut pad_r = 0.0;
+    if flagged {
+        let gc = pos2(rect.right() - if gen { 20.0 } else { 14.0 }, rect.center().y);
+        status_glyph(&p, gc, 6.0, crate::logic::Status::Bad, flag_c);
+        pad_r = 14.0;
     }
 
     let pad = if gen { 18.0 } else { 11.0 };
-    let inner = Rect::from_min_max(rect.min + vec2(pad, 1.0), rect.max - vec2(pad, 1.0));
+    let inner = Rect::from_min_max(rect.min + vec2(pad, 1.0), rect.max - vec2(pad + pad_r, 1.0));
     let mut child = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Center)));
     let font = th.font(Role::Mono, 14.72);
     let before = value.clone();
@@ -743,9 +774,78 @@ pub fn field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hi
 
 /// Caption + field stacked, occupying `rect.min` .. `rect.min + (w, 60)`.
 pub fn labeled_field(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, caption: &str, id: Id, value: &mut String, hint: &str, invalid: bool) -> bool {
+    labeled_field_s(ui, th, pos, w, caption, id, value, hint, if invalid { FieldState::Invalid } else { FieldState::Normal })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn labeled_field_s(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, caption: &str, id: Id, value: &mut String, hint: &str, state: FieldState) -> bool {
     label(ui, th, pos, caption);
     let r = Rect::from_min_size(pos + vec2(0.0, LABEL_H + LABEL_GAP), vec2(w, FIELD_H));
-    field(ui, th, r, id, value, hint, invalid)
+    field_s(ui, th, r, id, value, hint, state)
+}
+
+// ---------------------------------------------------------------------------
+// Status: shape + colour, so a result never depends on colour alone
+// ---------------------------------------------------------------------------
+
+/// (foreground, background) for a status in this palette.
+pub fn status_fg_bg(th: &Theme, s: crate::logic::Status) -> (Color32, Color32) {
+    use crate::logic::Status;
+    match s {
+        Status::Ok => (th.ok, th.ok_bg),
+        Status::Bad => (th.bad, th.bad_bg),
+        Status::Pending => (th.neutral, th.neutral_bg),
+    }
+}
+
+/// A tick (acceptable), an exclamation mark (flagged) or an open ring (waiting),
+/// drawn as strokes so it never depends on a font having the glyph.
+pub fn status_glyph(p: &Painter, c: Pos2, r: f32, s: crate::logic::Status, color: Color32) {
+    use crate::logic::Status;
+    let w = (r * 0.30).max(1.5);
+    match s {
+        Status::Ok => {
+            let pts = vec![c + vec2(-0.62 * r, 0.02 * r), c + vec2(-0.18 * r, 0.48 * r), c + vec2(0.66 * r, -0.46 * r)];
+            p.add(Shape::line(pts, Stroke::new(w, color)));
+        }
+        Status::Bad => {
+            p.line_segment([c + vec2(0.0, -0.70 * r), c + vec2(0.0, 0.18 * r)], Stroke::new(w, color));
+            p.circle_filled(c + vec2(0.0, 0.62 * r), w * 0.62, color);
+        }
+        Status::Pending => {
+            p.circle_stroke(c, 0.52 * r, Stroke::new(w * 0.75, color));
+        }
+    }
+}
+
+/// A status capsule: a solid disc holding the glyph, then the message.
+/// `pos` is interpreted through `anchor`; returns the capsule rect.
+#[allow(clippy::too_many_arguments)]
+pub fn status_pill(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, msg: &str, s: crate::logic::Status, h: f32, size: f32) -> Rect {
+    let (fg, bg) = status_fg_bg(th, s);
+    let msg = if th.palette == Palette::Cyberpunk { msg.to_uppercase() } else { msg.to_string() };
+    let g = galley(ui, th, &msg, Role::SansB, size, fg, if th.palette == Palette::Cyberpunk { 0.05 } else { 0.0 }, f32::INFINITY);
+    let disc = h - 12.0;
+    let pad_l = 6.0;
+    let pad_r = (h * 0.42).max(10.0);
+    let w = pad_l + disc + 8.0 + g.size().x + pad_r;
+    let rect = anchor.anchor_size(pos, vec2(w, h));
+    let p = ui.painter();
+    if th.palette == Palette::Cyberpunk {
+        cyber_panel(p, rect, 5.0, bg, 1.5, rgba(fg, 0.85));
+    } else {
+        fill(p, rect, pill(), bg);
+        stroke_in(p, rect, pill(), 1.5, rgba(fg, if s == crate::logic::Status::Pending { 0.45 } else { 0.80 }));
+    }
+    let dc = pos2(rect.left() + pad_l + disc / 2.0, rect.center().y);
+    if s == crate::logic::Status::Pending {
+        p.circle_stroke(dc, disc * 0.24, Stroke::new(1.5, rgba(fg, 0.75)));
+    } else {
+        p.circle_filled(dc, disc / 2.0, fg);
+        status_glyph(p, dc, disc * 0.36, s, bg);
+    }
+    paint_galley(p, th, Role::SansB, pos2(dc.x + disc / 2.0 + 8.0, rect.center().y - g.size().y / 2.0), g, fg);
+    rect
 }
 
 // ---------------------------------------------------------------------------
@@ -772,21 +872,16 @@ pub fn chip(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, s: &str, role: Role,
     rect
 }
 
-/// Status dot + label ("Acceptable" etc.), right-aligned at `right_mid`.
-pub fn badge(ui: &Ui, th: &Theme, right_mid: Pos2, s: &str, color: Color32) -> f32 {
+/// Status glyph + label ("✓ Acceptable", "! Flagged"), right-aligned at `right_mid`.
+pub fn badge(ui: &Ui, th: &Theme, right_mid: Pos2, s: &str, status: crate::logic::Status) -> f32 {
+    let (color, _) = status_fg_bg(th, status);
+    let color = if status == crate::logic::Status::Pending { th.muted } else { color };
     let label = if th.palette == Palette::Cyberpunk { s.to_uppercase() } else { s.to_string() };
-    let g = galley(ui, th, &label, Role::SansB, 11.52, color, 0.0, f32::INFINITY);
-    let w = g.size().x + 12.0;
+    let g = galley(ui, th, &label, Role::SansB, 12.0, color, 0.0, f32::INFINITY);
+    let w = g.size().x + 17.0;
     let left = right_mid.x - w;
-    let p = ui.painter();
-    if th.palette == Palette::Cyberpunk {
-        p.rect_filled(Rect::from_center_size(pos2(left + 3.0, right_mid.y), vec2(3.0, 9.0)), 0.0, color);
-    } else if th.palette == Palette::Pokemon {
-        p.rect_filled(Rect::from_center_size(pos2(left + 3.0, right_mid.y), vec2(7.0, 7.0)), 2.0, color);
-    } else {
-        p.circle_filled(pos2(left + 3.0, right_mid.y), 3.0, color);
-    }
-    paint_galley(p, th, Role::SansB, pos2(left + 12.0, right_mid.y - g.size().y / 2.0), g, color);
+    status_glyph(ui.painter(), pos2(left + 5.0, right_mid.y), 6.0, status, color);
+    paint_galley(ui.painter(), th, Role::SansB, pos2(left + 17.0, right_mid.y - g.size().y / 2.0), g, color);
     w
 }
 
@@ -836,6 +931,8 @@ pub struct CardOpts<'a> {
     /// Right-hand chip text; `big` selects the pill style used on FBC cards.
     pub chip: Option<(String, bool)>,
     pub min_height: f32,
+    /// A comparison in this card failed: flag-coloured edge and a "Review" tag.
+    pub alert: bool,
 }
 
 pub const HEAD_H: f32 = 57.0;
@@ -906,9 +1003,10 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
         let unit_role = if cyber { Role::Mono } else { Role::Sans };
         text(ui, th, pos2(t_rect.right() + 8.0, mid_y + 1.5), Align2::LEFT_CENTER, o.unit, unit_role, 11.84, th.muted);
     }
+    let mut chip_left = min.x + width - 1.0 - 20.0;
     if let Some((s, big)) = &o.chip {
         let right = min.x + width - 1.0 - 20.0;
-        if *big && gen {
+        let chip_r = if *big && gen {
             // level-tag style: slate capsule with cream type (light), a
             // smoked capsule with a gold rim on the dark screens
             let (fg, bg, bd) = if th.dark {
@@ -916,12 +1014,18 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
             } else {
                 (crate::theme::hex(0xece5d8), crate::theme::hex(0x4a5366), rgba(th.gold, 0.0))
             };
-            chip(ui, th, pos2(right, mid_y), Align2::RIGHT_CENTER, s, Role::MonoB, 15.0, fg, bg, Some((1.0, bd)), vec2(12.0, 3.0), pill());
+            chip(ui, th, pos2(right, mid_y), Align2::RIGHT_CENTER, s, Role::MonoB, 15.0, fg, bg, Some((1.0, bd)), vec2(12.0, 3.0), pill())
         } else if *big {
-            chip(ui, th, pos2(right, mid_y), Align2::RIGHT_CENTER, s, Role::MonoB, 16.0, th.accent_dark, th.accent_soft, Some((1.0, th.accent_dark)), vec2(11.0, 2.0), pill());
+            // The limit is reference information, so it is neutral: the
+            // accent/red family is reserved for results that need review.
+            chip(ui, th, pos2(right, mid_y), Align2::RIGHT_CENTER, s, Role::MonoB, 14.5, th.text, th.neutral_bg, Some((1.0, th.line_strong)), vec2(10.0, 2.0), pill())
         } else {
-            text(ui, th, pos2(right, mid_y), Align2::RIGHT_CENTER, s, Role::MonoB, 11.84, th.muted);
-        }
+            text(ui, th, pos2(right, mid_y), Align2::RIGHT_CENTER, s, Role::MonoB, 11.84, th.muted)
+        };
+        chip_left = chip_r.left();
+    }
+    if o.alert {
+        status_pill(ui, th, pos2(chip_left - 8.0, mid_y), Align2::RIGHT_CENTER, "Review", crate::logic::Status::Bad, 26.0, 12.0);
     }
 
     // body
@@ -936,6 +1040,8 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
 
     // backgrounds (set now that the height is known)
     let cut = 9.0;
+    // A flagged card trades its parameter colour for the flag colour on the edge.
+    let bar = if o.alert && !gen { Some(th.bad) } else { o.bar };
     let full = |c: Color32| Shape::rect_filled(rect, cr(r), c);
     if cyber {
         p.set(shadow_i, Shape::convex_polygon(chamfer_points(rect.translate(vec2(0.0, 2.0)), cut), Color32::from_black_alpha(if th.dark { 120 } else { 32 }), Stroke::NONE));
@@ -943,7 +1049,7 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
         if let Some(hb) = o.head_bg {
             p.set(band_i, cyber_band(rect, cut, HEAD_H, hb));
         }
-        if let Some(b) = o.bar {
+        if let Some(b) = bar {
             p.set(bar_i, cyber_bar(rect, cut, 4.0, b));
         }
     } else {
@@ -957,7 +1063,7 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
             let head_rect = Rect::from_min_size(min, vec2(width, HEAD_H));
             p.with_clip_rect(head_rect).set(band_i, full(th.surface2));
         }
-        if let (Some(b), false) = (o.bar, gen) {
+        if let (Some(b), false) = (bar, gen) {
             let bar_rect = Rect::from_min_size(min, vec2(4.0, h));
             p.with_clip_rect(bar_rect).set(bar_i, full(b));
         }
@@ -1003,10 +1109,17 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
         // the left edge is the coloured bar; draw the other three sides
         let c = border;
         p.rect_stroke(rect, cr(r), Stroke::new(1.0, c), StrokeKind::Inside);
-        p.with_clip_rect(Rect::from_min_size(min, vec2(4.0, h))).rect_filled(rect, cr(r), o.bar.unwrap());
+        p.with_clip_rect(Rect::from_min_size(min, vec2(4.0, h))).rect_filled(rect, cr(r), bar.unwrap());
     }
     if th.palette == Palette::Pokemon {
         stroke_in(&p, rect.shrink(2.5), r - 2.5, 1.0, rgba(th.ring, 0.20));
+    }
+    if o.alert {
+        if cyber {
+            cyber_stroke(&p, rect, cut, 2.0, th.bad);
+        } else {
+            stroke_in(&p, rect, r, 2.0, th.bad);
+        }
     }
     let divider_y = min.y + HEAD_H - 0.5;
     let x0 = min.x + bl;
@@ -1041,55 +1154,3 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
     rect
 }
 
-/// Plain horizontal divider-less panel used by the summary bar.
-pub fn summary_bar(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, status: &str, kind: crate::logic::Status) -> Rect {
-    let h = 61.0;
-    let rect = Rect::from_min_size(min, vec2(width, h));
-    crate::pikachu::perch(ui, ui.id().with("pika-summary"), rect, crate::pikachu::PerchKind::Top, false);
-    let p = ui.painter().clone();
-    let r = th.radius_lg;
-    let (bg, border, fg) = match th.palette {
-        Palette::Genshin => (
-            if th.dark { rgba(crate::theme::hex(0x1b202c), 0.92) } else { crate::theme::hex(0x3b4255) },
-            rgba(Color32::WHITE, 0.10),
-            crate::theme::hex(0xece5d8),
-        ),
-        Palette::Pokemon => (th.surface, if th.dark { rgba(th.text, 0.24) } else { Color32::from_white_alpha(235) }, th.text),
-        Palette::Cyberpunk => (th.surface, rgba(th.ring, if th.dark { 0.40 } else { 0.45 }), th.text),
-        _ => (th.surface, th.line, th.text),
-    };
-    if th.palette == Palette::Cyberpunk {
-        p.add(Shape::convex_polygon(chamfer_points(rect.translate(vec2(0.0, 2.0)), 9.0), Color32::from_black_alpha(if th.dark { 120 } else { 30 }), Stroke::NONE));
-        cyber_panel(&p, rect, 9.0, bg, 1.0, border);
-        p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, rect.height())), 0.0, th.accent);
-        p.line_segment([pos2(rect.left() + 20.0, rect.top() + 1.0), pos2(rect.left() + 92.0, rect.top() + 1.0)], Stroke::new(2.0_f32, th.accent));
-    } else {
-        p.add(card_shadow(&p, th, rect, r));
-        fill(&p, rect, r, bg);
-        stroke_in(&p, rect, r, if th.palette == Palette::Pokemon { 2.5 } else { 1.0 }, border);
-    }
-    if th.palette == Palette::Genshin {
-        let mut gt = *th;
-        gt.dark = true;
-        gt.gold = crate::theme::hex(0xd3bc8e);
-        genshin_frame(&p, &gt, rect, r);
-        diamond(&p, pos2(rect.left() + 13.0, rect.center().y), 4.0, gt.gold, Stroke::NONE);
-    }
-    if th.palette == Palette::Pokemon {
-        pokeball(&p, pos2(rect.left() + 13.0, rect.center().y), 12.0, th.ink, th.accent, Color32::WHITE);
-    }
-    let label_x = if matches!(th.palette, Palette::Pokemon | Palette::Genshin) { rect.left() + 27.0 } else { rect.left() + 20.0 };
-    if th.palette == Palette::Cyberpunk {
-        text_ls(ui, th, pos2(label_x, rect.center().y), Align2::LEFT_CENTER, "OVERALL STATUS", Role::SansB, 14.72, fg, 0.07);
-    } else {
-        text(ui, th, pos2(label_x, rect.center().y), Align2::LEFT_CENTER, "Overall status", Role::SansB, 14.72, fg);
-    }
-    let (pf, pb) = match kind {
-        crate::logic::Status::Ok => (th.ok, th.ok_bg),
-        crate::logic::Status::Bad => (th.bad, th.bad_bg),
-        crate::logic::Status::Pending => (th.neutral, th.neutral_bg),
-    };
-    let status_text = if th.palette == Palette::Cyberpunk { status.to_uppercase() } else { status.to_string() };
-    chip(ui, th, pos2(rect.right() - 20.0, rect.center().y), Align2::RIGHT_CENTER, &status_text, Role::SansB, 12.48, pf, pb, None, vec2(13.0, 5.0), pill());
-    rect
-}

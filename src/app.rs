@@ -74,11 +74,15 @@ pub struct App {
     pub retic_note: Option<String>,
     pub calc_open: bool,
     pub dil: [String; 5],
+    /// Theme popover (opened from the title bar's Theme button).
+    pub menu_open: bool,
+    pub menu_btn: Rect,
     genshin_backdrop: egui::TextureHandle,
     pokemon_backdrop: egui::TextureHandle,
     cyberpunk_backdrop: egui::TextureHandle,
     styled: Option<(Palette, bool)>,
     pika: crate::pikachu::Pikachu,
+    paimon: crate::paimon::Paimon,
     #[cfg(feature = "screenshot")]
     shot: crate::app::Shot,
 }
@@ -92,6 +96,7 @@ pub struct Shot {
     /// Frame on which to capture (HAEM_FRAMES, default 8).
     at: u32,
     pika_sheet: bool,
+    paimon_sheet: bool,
     /// Simulated right-click, sent once Pikachu has landed (HAEM_SCENE=goal=X:Y).
     goal: Option<egui::Pos2>,
 }
@@ -114,11 +119,14 @@ impl App {
             retic_note: None,
             calc_open: false,
             dil: Default::default(),
+            menu_open: false,
+            menu_btn: Rect::NOTHING,
             genshin_backdrop: genshin_backdrop_texture(&cc.egui_ctx),
             pokemon_backdrop: pokemon_backdrop_texture(&cc.egui_ctx),
             cyberpunk_backdrop: cyberpunk_backdrop_texture(&cc.egui_ctx),
             styled: None,
             pika: crate::pikachu::Pikachu::new(),
+            paimon: crate::paimon::Paimon::new(),
             #[cfg(feature = "screenshot")]
             shot: Default::default(),
         };
@@ -244,12 +252,12 @@ impl eframe::App for App {
             let screen = ui.max_rect();
             paint_page_background(ui, &th, screen, &self.genshin_backdrop, &self.pokemon_backdrop, &self.cyberpunk_backdrop);
 
-            let app_w = (screen.width() - 48.0).min(1440.0).max(480.0);
+            // Theme controls live in the title bar, so the results get the full
+            // width (capped so rows stay scannable on wide monitors).
+            let app_w = (screen.width() - 48.0).min(1280.0).max(300.0);
             let left = screen.left() + ((screen.width() - app_w) / 2.0).max(24.0);
-            // The theme rail ends around left+98; keep a 38 pt gutter rather
-            // than leaving a dead 100 pt band between it and the main body.
-            let content_left = left + 136.0;
-            let content_w = (left + app_w - content_left).max(300.0);
+            let content_left = left;
+            let content_w = app_w;
 
             #[allow(unused_mut)]
             let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]).drag_to_scroll(false);
@@ -270,21 +278,31 @@ impl eframe::App for App {
                 nav_fields(ui, focus_before);
             });
 
-            self.sidebar(ui, &th, pos2(left, screen.top() + 36.0));
             crate::pikachu::perch(ui, Id::new("pika-floor"), screen, crate::pikachu::PerchKind::Floor, false);
             crate::chrome::resize_frame(ui);
         });
 
-        // Pokémon mascot: roams the perches registered above.
+        if self.menu_open {
+            self.theme_menu(ctx);
+        }
+
+        // Theme mascots: roam the perches registered above.
         self.pika.tick(ctx, &th, self.palette == Palette::Pokemon);
+        self.paimon.tick(ctx, &th, self.palette == Palette::Genshin);
         #[cfg(feature = "screenshot")]
         {
             if self.shot.pika_sheet {
                 crate::pikachu::debug_sheet(ctx);
             }
+            if self.shot.paimon_sheet {
+                crate::paimon::debug_sheet(ctx);
+            }
             if self.shot.frame == 90 {
                 if let Some(g) = self.shot.goal {
                     self.pika.debug_goal(g);
+                    if self.palette == Palette::Genshin {
+                        self.paimon.debug_goal(ctx, g);
+                    }
                 }
             }
         }
@@ -411,23 +429,54 @@ fn nav_fields(ui: &Ui, focus_before: Option<Id>) {
 // Sidebar
 // ---------------------------------------------------------------------------
 
+const MENU_W: f32 = 150.0;
+const MENU_ROW: f32 = 28.0;
+const MENU_GAP: f32 = 4.0;
+const MENU_SPLIT: f32 = 9.0;
+
+fn menu_content_h() -> f32 {
+    // dark-mode row, a divider, then the three palette rows
+    // (Cyberpunk is implemented but hidden for now).
+    MENU_ROW + MENU_SPLIT + 3.0 * (MENU_GAP + MENU_ROW)
+}
+
 impl App {
-    fn sidebar(&mut self, ui: &mut Ui, th: &Theme, origin: egui::Pos2) {
-        let w = 88.0; // compact content width
-        let toggle_h = 20.0;
-        let gap = 3.5;
-        // Cyberpunk is implemented but hidden for now; only three palette rows.
-        let total_h = toggle_h + 3.0 * (gap + toggle_h);
+    /// The theme popover under the title bar's Theme button. Closes on Esc or
+    /// a click anywhere else; stays open while palettes are compared.
+    fn theme_menu(&mut self, ctx: &egui::Context) {
+        let th = self.theme();
+        let panel_w = MENU_W + 20.0;
+        let btn = self.menu_btn;
+        let panel = Rect::from_min_size(pos2(btn.right() - panel_w, crate::chrome::CHROME_H + 6.0), vec2(panel_w, menu_content_h() + 28.0));
+        let origin = panel.min + vec2(10.0, 14.0);
+        egui::Area::new(Id::new("theme-menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(panel.min)
+            .show(ctx, |ui| {
+                ui.allocate_rect(panel, Sense::click());
+                self.menu_body(ui, &th, origin);
+            });
+        let (esc, press) = ctx.input(|i| (i.key_pressed(egui::Key::Escape), if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None }));
+        if esc || press.is_some_and(|pt| !panel.contains(pt) && !btn.contains(pt)) {
+            self.menu_open = false;
+        }
+    }
+
+    fn menu_body(&mut self, ui: &mut Ui, th: &Theme, origin: egui::Pos2) {
+        let w = MENU_W;
+        let toggle_h = MENU_ROW;
+        let gap = MENU_GAP;
+        let total_h = menu_content_h();
         let sb = Rect::from_min_size(origin, vec2(w + 20.0, total_h));
         let p = ui.painter().clone();
 
         match th.palette {
             Palette::Genshin => {
                 let r = Rect::from_min_max(pos2(sb.left() - 10.0, sb.top() - 14.0), pos2(sb.right() - 10.0, sb.bottom() + 14.0));
-                // Settings-menu rail: a dark slate dialog with the gold corner
+                // Settings-menu dialog: dark slate with the gold corner
                 // brackets, holding a text list whose selection is a cream bar.
                 p.add(card_shadow(&p, th, r, th.radius_lg));
-                fill(&p, r, th.radius_lg, if th.dark { rgba(hex(0x1b202c), 0.92) } else { hex(0x3b4255) });
+                fill(&p, r, th.radius_lg, if th.dark { rgba(hex(0x1b202c), 0.97) } else { hex(0x3b4255) });
                 stroke_in(&p, r, th.radius_lg, 1.0, rgba(Color32::WHITE, 0.10));
                 let mut gt = *th;
                 gt.dark = true;
@@ -440,7 +489,6 @@ impl App {
                 p.add(card_shadow(&p, th, r, th.radius_lg));
                 fill(&p, r, th.radius_lg, th.surface);
                 stroke_in(&p, r, th.radius_lg, 2.5, if th.dark { rgba(th.text, 0.20) } else { Color32::from_white_alpha(220) });
-                crate::pikachu::perch(ui, Id::new("pika-sidebar"), r, crate::pikachu::PerchKind::Top, false);
                 stroke_in(&p, r.shrink(2.5), th.radius_lg - 2.5, 1.0, rgba(th.ring, 0.35));
             }
             Palette::Cyberpunk => {
@@ -454,7 +502,13 @@ impl App {
                 p.line_segment([pos2(r.left() + 9.0, r.top() + 1.0), pos2(r.right() - 9.0, r.top() + 1.0)], Stroke::new(1.0_f32, rgba(th.accent, 0.65)));
             }
             Palette::Default => {
-                p.line_segment([pos2(sb.right() - 0.5, sb.top()), pos2(sb.right() - 0.5, sb.bottom())], Stroke::new(1.0, th.line));
+                let r = Rect::from_min_max(pos2(sb.left() - 10.0, sb.top() - 14.0), pos2(sb.right() - 10.0, sb.bottom() + 14.0));
+                p.add(egui::Shape::from(
+                    egui::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(if th.dark { 120 } else { 40 }) }
+                        .as_shape(r, crate::ui::cr(th.radius_lg)),
+                ));
+                fill(&p, r, th.radius_lg, th.surface);
+                stroke_in(&p, r, th.radius_lg, 1.0, th.line_strong);
             }
         }
 
@@ -470,6 +524,7 @@ impl App {
         } else {
             sun_icon(&p, icon_c, fgc);
         }
+        text(ui, th, pos2(icon_c.x + 12.0, rect.center().y), Align2::LEFT_CENTER, "Dark mode", Role::Sans, 13.0, fgc);
         // switch
         let sw = Rect::from_min_size(pos2(rect.right() - 8.0 - 22.0, rect.center().y - 6.0), vec2(22.0, 12.0));
         let on = ui.ctx().animate_bool_with_time(Id::new("dark-anim"), th.dark, 0.2);
@@ -491,6 +546,9 @@ impl App {
             self.toggle_dark();
         }
         y += toggle_h;
+        let div_c = if th.palette == Palette::Genshin { rgba(hex(0xd3bc8e), 0.35) } else { th.line };
+        p.line_segment([pos2(origin.x + 2.0, y + MENU_SPLIT / 2.0), pos2(origin.x + w - 2.0, y + MENU_SPLIT / 2.0)], Stroke::new(1.0, div_c));
+        y += MENU_SPLIT - gap;
 
         // --- palettes
         // Cyberpunk is intentionally omitted while the theme is parked.
@@ -553,7 +611,7 @@ impl App {
                     );
                 }
             }
-            text(ui, th, pos2(sc.x + 5.0 + 5.0, rect.center().y), Align2::LEFT_CENTER, name, Role::Sans, 12.0, fg);
+            text(ui, th, pos2(sc.x + 12.0, rect.center().y), Align2::LEFT_CENTER, name, Role::Sans, 13.0, fg);
             if resp.clicked() {
                 self.set_palette(*pal);
             }
@@ -659,12 +717,14 @@ impl App {
                 "dark" => self.dark = v == "1",
                 "fill" => fill_data = v == "1",
                 "calc" => self.calc_open = v == "1",
+                "menu" => self.menu_open = v == "1",
                 "third" => {
                     self.fbc.third = v == "1";
                     self.pt.third = v == "1";
                 }
                 "scroll" => self.shot.scroll = v.parse().unwrap_or(0.0),
                 "pika" => self.shot.pika_sheet = v == "sheet",
+                "paimon" => self.shot.paimon_sheet = v == "sheet",
                 "goal" => {
                     let xy: Vec<f32> = v.split(':').filter_map(|n| n.parse().ok()).collect();
                     if xy.len() == 2 {

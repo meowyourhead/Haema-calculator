@@ -5,6 +5,7 @@ mod chrome;
 mod cursor;
 mod fonts;
 mod logic;
+mod paimon;
 mod panels;
 mod pikachu;
 mod reference;

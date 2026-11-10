@@ -25,21 +25,80 @@ fn status_colors(th: &Theme, s: Status) -> Color32 {
 // Duplicate-run checkers (FBC, PT / APTT)
 // ---------------------------------------------------------------------------
 
-fn overall_status(ck: &Checker) -> Status {
-    let mut all = vec![];
-    for (p, vals) in ck.params.iter().zip(&ck.vals) {
-        let pairs: &[(usize, usize)] = if ck.third { &[(0, 1), (0, 2), (1, 2)] } else { &[(0, 1)] };
-        for (a, b) in pairs {
-            all.push(pair_result(parse_positive(&vals[*a]), parse_positive(&vals[*b]), p.limit).status);
-        }
+fn run_pairs(third: bool) -> &'static [(usize, usize)] {
+    if third {
+        &[(0, 1), (0, 2), (1, 2)]
+    } else {
+        &[(0, 1)]
     }
-    if all.contains(&Status::Bad) {
+}
+
+/// One parameter's verdict and which runs to point at when it is flagged.
+struct ParamEval {
+    status: Status,
+    flagged_runs: [bool; 3],
+}
+
+fn eval_param(p: &ParamDef, vals: &[String; 3], third: bool) -> ParamEval {
+    let mut statuses = vec![];
+    let mut failing: Vec<(usize, usize)> = vec![];
+    for &(a, b) in run_pairs(third) {
+        let s = pair_result(parse_positive(&vals[a]), parse_positive(&vals[b]), p.limit).status;
+        if s == Status::Bad {
+            failing.push((a, b));
+        }
+        statuses.push(s);
+    }
+    let status = if statuses.contains(&Status::Bad) {
         Status::Bad
-    } else if !all.is_empty() && all.iter().all(|s| *s == Status::Ok) {
+    } else if statuses.iter().all(|s| *s == Status::Ok) {
         Status::Ok
     } else {
         Status::Pending
+    };
+    // Point at the run common to every failing comparison (the outlier); if
+    // no single run explains it, mark every run involved.
+    let mut flagged_runs = [false; 3];
+    if !failing.is_empty() {
+        let common: Vec<usize> = (0..3).filter(|r| failing.iter().all(|(a, b)| a == r || b == r)).collect();
+        if common.len() == 1 {
+            flagged_runs[common[0]] = true;
+        } else {
+            for (a, b) in &failing {
+                flagged_runs[*a] = true;
+                flagged_runs[*b] = true;
+            }
+        }
     }
+    ParamEval { status, flagged_runs }
+}
+
+/// "HGB", "HGB and PLT", "WBC, HGB and PLT".
+fn join_and(names: &[&str]) -> String {
+    match names.len() {
+        0 => String::new(),
+        1 => names[0].to_string(),
+        n => format!("{} and {}", names[..n - 1].join(", "), names[n - 1]),
+    }
+}
+
+/// The checker's headline: what the technologist has to do next.
+fn overall_message(ck: &Checker, evals: &[ParamEval]) -> (Status, String) {
+    let flagged: Vec<&str> = ck.params.iter().zip(evals).filter(|(_, e)| e.status == Status::Bad).map(|(p, _)| p.name).collect();
+    if !flagged.is_empty() {
+        return (Status::Bad, format!("Review {}", join_and(&flagged)));
+    }
+    if evals.iter().all(|e| e.status == Status::Ok) {
+        return (Status::Ok, "All acceptable".into());
+    }
+    let n = if ck.third { 3 } else { 2 };
+    let any_entered = ck.vals.iter().any(|v| v[..n].iter().any(|s| !s.trim().is_empty()));
+    if !any_entered {
+        let runs = if ck.third { "Enter runs 1, 2 and 3" } else { "Enter run 1 and run 2" };
+        return (Status::Pending, runs.into());
+    }
+    let waiting: Vec<&str> = ck.params.iter().zip(evals).filter(|(_, e)| e.status == Status::Pending).map(|(p, _)| p.name).collect();
+    (Status::Pending, format!("Waiting for {}", join_and(&waiting)))
 }
 
 /// A Genshin settings row (Settings / Key Bindings): a soft bar holding the
@@ -85,24 +144,30 @@ fn result_row(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, label: &str, res: &Pai
     }
     let mid = pos.y + 1.0 + (h - 1.0) / 2.0;
     text(ui, th, pos2(pos.x + 1.0, mid), Align2::LEFT_CENTER, label, Role::Sans, 12.8, th.muted);
-    let color = status_colors(th, res.status);
-    let bw = badge(ui, th, pos2(pos.x + w - 1.0, mid), res.badge, color);
-    text(ui, th, pos2(pos.x + w - 1.0 - bw - 10.0, mid), Align2::RIGHT_CENTER, &res.percent, Role::MonoB, 14.4, th.text);
+    let bw = badge(ui, th, pos2(pos.x + w - 1.0, mid), res.badge, res.status);
+    let pc = if res.status == Status::Bad { status_colors(th, res.status) } else { th.text };
+    text(ui, th, pos2(pos.x + w - 1.0 - bw - 12.0, mid), Align2::RIGHT_CENTER, &res.percent, Role::MonoB, 14.4, pc);
 }
 
-fn checker_body(ui: &mut Ui, th: &Theme, iw: f32, key: &str, p: &ParamDef, vals: &mut [String; 3], third: bool) {
+#[allow(clippy::too_many_arguments)]
+fn checker_body(ui: &mut Ui, th: &Theme, iw: f32, key: &str, p: &ParamDef, vals: &mut [String; 3], third: bool, flagged_runs: [bool; 3]) {
     let o = ui.cursor().min;
     let n = if third { 3 } else { 2 };
     let gap = 12.0;
     let colw = (iw - gap * (n as f32 - 1.0)) / n as f32;
     for k in 0..n {
         let pos = o + vec2(k as f32 * (colw + gap), 0.0);
-        let invalid = parse_positive(&vals[k]) == Num::Invalid;
-        labeled_field(ui, th, pos, colw, &format!("Run {}", k + 1), Id::new((key, p.id, k)), &mut vals[k], p.ph[k], invalid);
+        let state = if parse_positive(&vals[k]) == Num::Invalid {
+            FieldState::Invalid
+        } else if flagged_runs[k] {
+            FieldState::Flagged
+        } else {
+            FieldState::Normal
+        };
+        labeled_field_s(ui, th, pos, colw, &format!("Run {}", k + 1), Id::new((key, p.id, k)), &mut vals[k], p.ph[k], state);
     }
     let mut y = o.y + 60.0 + 18.0;
-    let pairs: &[(usize, usize)] = if third { &[(0, 1), (0, 2), (1, 2)] } else { &[(0, 1)] };
-    for (a, b) in pairs {
+    for (a, b) in run_pairs(third) {
         let res = pair_result(parse_positive(&vals[*a]), parse_positive(&vals[*b]), p.limit);
         result_row(ui, th, pos2(o.x, y), iw, &format!("Run {} vs Run {}", a + 1, b + 1), &res);
         y += 41.0;
@@ -112,7 +177,6 @@ fn checker_body(ui: &mut Ui, th: &Theme, iw: f32, key: &str, p: &ParamDef, vals:
 
 impl App {
     pub fn checker_panel(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32, is_fbc: bool) -> f32 {
-        let screen_w = ui.ctx().screen_rect().width();
         let ck = if is_fbc { &mut self.fbc } else { &mut self.pt };
         let key = ck.key;
         let params = ck.params;
@@ -146,9 +210,14 @@ impl App {
             ui.memory_mut(|m| m.request_focus(Id::new((key, params[0].id, 0usize))));
         }
 
-        let cols = if screen_w > 900.0 { 2 } else { 1 };
-        let cw = (w - 16.0 * (cols as f32 - 1.0)) / cols as f32;
+        // Verdicts first, so the headline sits above the cards it summarises.
         let third = ck.third;
+        let evals: Vec<ParamEval> = params.iter().zip(&ck.vals).map(|(p, v)| eval_param(p, v, third)).collect();
+        let (st, msg) = overall_message(ck, &evals);
+        status_pill(ui, th, pos2(origin.x, origin.y + 18.0), Align2::LEFT_CENTER, &msg, st, 36.0, 14.0);
+
+        let cols = if w >= 640.0 { 2 } else { 1 };
+        let cw = (w - 16.0 * (cols as f32 - 1.0)) / cols as f32;
         let n = params.len();
         let mut idx = 0;
         while idx < n {
@@ -169,23 +238,17 @@ impl App {
                     title_color: title_c,
                     chip: Some((format!("≤ {}%", fmt_js(pd.limit)), is_fbc)),
                     min_height: 0.0,
+                    alert: evals[i].status == Status::Bad,
                 };
                 let vals = &mut ck.vals[i];
-                let rect = card(ui, th, pos2(x, y), cw, &opts, |ui, iw| checker_body(ui, th, iw, key, pd, vals, third));
+                let flagged_runs = evals[i].flagged_runs;
+                let rect = card(ui, th, pos2(x, y), cw, &opts, |ui, iw| checker_body(ui, th, iw, key, pd, vals, third, flagged_runs));
                 row_bottom = row_bottom.max(rect.bottom());
             }
             y = row_bottom + 16.0;
             idx = end;
         }
-
-        let st = overall_status(ck);
-        let msg = match st {
-            Status::Bad => "Review flagged result",
-            Status::Ok => "All acceptable",
-            Status::Pending => "Awaiting results",
-        };
-        let r = summary_bar(ui, th, pos2(origin.x, y + 4.0), w, msg, st);
-        r.bottom()
+        y - 16.0
     }
 }
 
@@ -200,6 +263,9 @@ pub struct ReticOut {
     pub absolute_text: String,
     pub absolute_note: Option<String>,
     pub rbc_note: Option<String>,
+    /// What is still missing (or why there is no value), shown under an empty result.
+    pub corrected_hint: Option<String>,
+    pub absolute_hint: Option<String>,
 }
 
 pub enum EqPart {
@@ -235,9 +301,13 @@ impl App {
     }
 
     pub fn compute_retic(&self) -> ReticOut {
-        let (retic, _hct, rbc, corrected) = self.retic_nums();
+        let (retic, hct, rbc, corrected) = self.retic_nums();
         let reticv = retic.ok();
         let rbcv = rbc.ok();
+        let needs = |items: &[(&'static str, bool)]| {
+            let missing: Vec<&str> = items.iter().filter(|(_, have)| !have).map(|(n, _)| *n).collect();
+            if missing.is_empty() { None } else { Some(format!("Needs {}", join_and(&missing))) }
+        };
         let mut out = ReticOut {
             corrected_text: "—".into(),
             corrected_rounded: false,
@@ -245,7 +315,12 @@ impl App {
             absolute_text: "—".into(),
             absolute_note: None,
             rbc_note: None,
+            corrected_hint: needs(&[("retic %", reticv.is_some()), ("HCT", hct.ok().is_some()), ("gender", self.gender.is_some())]),
+            absolute_hint: needs(&[("retic %", reticv.is_some()), ("RBC", rbcv.is_some())]),
         };
+        if corrected == Corrected::Nil {
+            out.corrected_hint = Some("HCT is not below the threshold, so no correction applies".into());
+        }
         let rbc_r = rbcv.map(round1);
         if let (Some(r), Some(rr)) = (rbcv, rbc_r) {
             if is_rounded(r, rr) {
@@ -400,7 +475,6 @@ impl App {
     }
 
     pub fn retic_panel(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
-        let screen_w = ui.ctx().screen_rect().width();
         let mut y = origin.y;
         let (mut reset, mut toggle) = (false, false);
         let calc_open = self.calc_open;
@@ -422,7 +496,7 @@ impl App {
         }
 
         let out = self.compute_retic();
-        let two_col = screen_w > 900.0;
+        let two_col = w >= 860.0;
         let gap = 16.0;
         let h_id = Id::new("retic-grid-h");
         let min_h: f32 = if two_col { ui.ctx().data(|d| d.get_temp(h_id)).unwrap_or(0.0) } else { 0.0 };
@@ -441,10 +515,10 @@ impl App {
             helper_pos = pos2(origin.x, y); // fixed below
         }
 
-        let main_opts = CardOpts { title: "Reticulocyte", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: min_h };
+        let main_opts = CardOpts { title: "Reticulocyte", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: min_h, alert: false };
         let main_rect = card(ui, th, main_pos, main_w, &main_opts, |ui, iw| self.retic_main_body(ui, th, iw, &out));
         let helper_pos = if two_col { helper_pos } else { pos2(origin.x, main_rect.bottom() + gap) };
-        let helper_opts = CardOpts { title: "Counting helper", unit: "retics / 1000 RBCs", bar: None, head_bg: None, title_color: None, chip: None, min_height: min_h };
+        let helper_opts = CardOpts { title: "Counting helper", unit: "retics / 1000 RBCs", bar: None, head_bg: None, title_color: None, chip: None, min_height: min_h, alert: false };
         let helper_rect = card(ui, th, helper_pos, helper_w, &helper_opts, |ui, iw| self.helper_body(ui, th, iw));
         let row_h = main_rect.height().max(helper_rect.height());
         if two_col {
@@ -457,7 +531,7 @@ impl App {
         y = main_rect.bottom().max(helper_rect.bottom()) + 16.0;
 
         if self.calc_open {
-            y = self.calc_card(ui, th, pos2(origin.x, y), w, screen_w) + 16.0;
+            y = self.calc_card(ui, th, pos2(origin.x, y), w) + 16.0;
         }
         let bottom = crate::reference::reference_card(ui, th, pos2(origin.x, y), w);
         bottom
@@ -492,8 +566,11 @@ impl App {
         }
 
         let mut y = o.y + row_h + 18.0;
-        y += hero_row(ui, th, pos2(o.x, y), iw, "corrected retic (%)", &out.corrected_text, out.corrected_rounded, out.corrected_note.as_deref(), false);
-        y += hero_row(ui, th, pos2(o.x, y), iw, "absolute retic (×10⁹)", &out.absolute_text, false, out.absolute_note.as_deref(), true);
+        let tiles = [
+            Tile { label: "Corrected retic", value: &out.corrected_text, unit: "%", rounded: out.corrected_rounded, note: out.corrected_note.as_deref(), hint: out.corrected_hint.as_deref() },
+            Tile { label: "Absolute retic", value: &out.absolute_text, unit: "×10⁹/L", rounded: false, note: out.absolute_note.as_deref(), hint: out.absolute_hint.as_deref() },
+        ];
+        y += result_tiles(ui, th, pos2(o.x, y), iw, &tiles);
 
         // disclaimer
         y += 16.0;
@@ -612,7 +689,7 @@ impl App {
         }
         let mut child = ui.new_child(UiBuilder::new().max_rect(row).layout(Layout::right_to_left(Align::Center)));
         let b = button(&mut child, th, "Use as retic %", Btn::Mini, true);
-        text(ui, th, pos2(b.rect.left() - 10.0, row.center().y), Align2::RIGHT_CENTER, &avg_text, Role::MonoB, 16.0, th.accent);
+        text(ui, th, pos2(b.rect.left() - 10.0, row.center().y), Align2::RIGHT_CENTER, &avg_text, Role::MonoB, 16.0, if avg.is_some() { th.text } else { th.muted });
         if b.clicked() {
             if let Some(a) = avg {
                 let ar = round2(a);
@@ -632,13 +709,21 @@ impl App {
         }
     }
 
-    fn calc_card(&mut self, ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, screen_w: f32) -> f32 {
+    fn calc_card(&mut self, ui: &mut Ui, th: &Theme, pos: Pos2, w: f32) -> f32 {
         let steps = self.build_steps();
-        let opts = CardOpts { title: "Calculations", unit: "step by step · updates as you type", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0 };
+        let opts = CardOpts { title: "Calculations", unit: "updates as you type", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false };
         let rect = card(ui, th, pos, w, &opts, |ui, iw| {
             let o = ui.cursor().min;
-            let big = screen_w >= 1100.0;
-            let (cols, gap) = if big { (4usize, 16.0) } else { ((((iw + 8.0) / 218.0).floor() as usize).max(1), 8.0) };
+            // Steps wrap into a 4×1, 2×2 or 1×4 grid by the width available;
+            // never 3 + 1, which would orphan the final result.
+            let gap = 16.0;
+            let fit = (((iw + gap) / (236.0 + gap)).floor() as usize).clamp(1, 4);
+            let cols = match fit {
+                4 => 4,
+                2 | 3 => 2,
+                _ => 1,
+            };
+            let big = cols == 4;
             let cols = cols.min(steps.len().max(1));
             let cw = (iw - gap * (cols as f32 - 1.0)) / cols as f32;
             let mut y = o.y;
@@ -676,54 +761,92 @@ impl App {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn hero_row(ui: &mut Ui, th: &Theme, pos: Pos2, iw: f32, label_s: &str, value: &str, rounded: bool, note_s: Option<&str>, accent: bool) -> f32 {
-    let suffix = if rounded { " (2 dp)" } else { "" };
-    let vw = text_width(ui, th, value, Role::MonoB, 20.8) + if rounded { 6.0 + text_width(ui, th, suffix.trim(), Role::SansB, 10.88) } else { 0.0 };
-    let pill_w = (vw + 36.0 + 3.0).max(96.0);
-    let side_w = ((iw - pill_w - 20.0) / 2.0).max(40.0);
-    let note_sz = note_s.map(|n| note_size(ui, th, n, side_w));
-    let content_h = 34.4_f32.max(note_sz.map(|s| s.y).unwrap_or(0.0));
-    let h = 1.0 + 10.0 + content_h + 10.0;
+/// One calculated result: corrected or absolute retic.
+struct Tile<'a> {
+    label: &'a str,
+    value: &'a str,
+    unit: &'a str,
+    rounded: bool,
+    note: Option<&'a str>,
+    hint: Option<&'a str>,
+}
+
+const TILE_PAD: f32 = 14.0;
+const TILE_VALUE: f32 = 26.0;
+const TILE_HINT: f32 = 12.5;
+
+fn tile_extra_h(ui: &Ui, th: &Theme, t: &Tile, w: f32) -> f32 {
+    let inner = w - 2.0 * TILE_PAD;
+    if let Some(n) = t.note {
+        8.0 + note_size(ui, th, n, inner).y
+    } else if let Some(h) = t.hint {
+        6.0 + paragraph_height(ui, th, inner, h, Role::Sans, TILE_HINT, 1.3)
+    } else {
+        0.0
+    }
+}
+
+/// The two results as a matching pair of tiles (side by side when there is
+/// room). Values are plain ink: they are results, not warnings. Returns height.
+fn result_tiles(ui: &mut Ui, th: &Theme, pos: Pos2, iw: f32, tiles: &[Tile]) -> f32 {
+    let gap = 12.0;
+    let side = iw >= 420.0;
+    let tw = if side { (iw - gap) / 2.0 } else { iw };
+    let base_h = TILE_PAD + 16.0 + 6.0 + 32.0 + TILE_PAD - 4.0;
+    let extras: Vec<f32> = tiles.iter().map(|t| tile_extra_h(ui, th, t, tw)).collect();
+    let row_h = base_h + extras.iter().cloned().fold(0.0, f32::max);
     let p = ui.painter().clone();
-    p.line_segment([pos2(pos.x, pos.y + 0.5), pos2(pos.x + iw, pos.y + 0.5)], Stroke::new(1.0, th.line));
-    let cy = pos.y + 1.0 + 10.0 + content_h / 2.0;
-    if th.palette == Palette::Cyberpunk {
-        text_ls(ui, th, pos2(pos.x + 1.0, cy), Align2::LEFT_CENTER, &label_s.to_uppercase(), Role::MonoB, 11.8, th.muted, 0.06);
-    } else {
-        text(ui, th, pos2(pos.x + 1.0, cy), Align2::LEFT_CENTER, label_s, Role::Sans, 13.12, th.muted);
-    }
-    let pr = Rect::from_center_size(pos2(pos.x + iw / 2.0, cy), vec2(pill_w, 34.4));
-    let (fg, bg, bd) = if th.palette == Palette::Cyberpunk {
-        if accent {
-            (th.on_accent, th.accent, th.accent)
-        } else {
-            (th.ring, rgba(th.ring, 0.10), rgba(th.ring, 0.75))
+    let mut bottom = pos.y;
+    for (i, t) in tiles.iter().enumerate() {
+        let (x, y, h) = if side { (pos.x + i as f32 * (tw + gap), pos.y, row_h) } else { (pos.x, bottom + if i > 0 { gap } else { 0.0 }, base_h + extras[i]) };
+        let r = Rect::from_min_size(pos2(x, y), vec2(tw, h));
+        bottom = r.bottom();
+        match th.palette {
+            Palette::Cyberpunk => cyber_panel(&p, r, 6.0, rgba(th.surface2, if th.dark { 0.80 } else { 1.0 }), 1.0, rgba(th.ring, 0.35)),
+            Palette::Genshin => {
+                let base = if th.dark { hex(0x384053) } else { crate::theme::mix(0.07, hex(0x4a5366), th.surface) };
+                fill(&p, r, 5.0, base);
+                stroke_in(&p, r, 5.0, 1.0, rgba(th.gold, 0.40));
+            }
+            Palette::Pokemon => {
+                fill(&p, r, 14.0, th.field);
+                stroke_in(&p, r, 14.0, 1.5, rgba(th.ring, 0.35));
+            }
+            Palette::Default => {
+                fill(&p, r, th.radius, th.surface2);
+                stroke_in(&p, r, th.radius, 1.0, th.line);
+            }
         }
-    } else if accent {
-        (th.on_accent, th.accent, th.accent)
-    } else {
-        (th.accent_dark, th.accent_soft, th.accent)
-    };
-    let radius = if th.palette == Palette::Cyberpunk { 0.0 } else { pill() };
-    if th.palette == Palette::Cyberpunk {
-        cyber_panel(&p, pr, 5.0, bg, 1.5, bd);
-    } else {
-        fill(&p, pr, radius, bg);
-        stroke_in(&p, pr, radius, 1.5, bd);
+        let x0 = r.left() + TILE_PAD;
+        let mut cy = r.top() + TILE_PAD - 2.0;
+        if th.palette == Palette::Cyberpunk {
+            text_ls(ui, th, pos2(x0, cy), Align2::LEFT_TOP, &t.label.to_uppercase(), Role::MonoB, 11.8, th.muted, 0.06);
+        } else {
+            text(ui, th, pos2(x0, cy), Align2::LEFT_TOP, t.label, Role::SansB, 13.0, th.muted);
+        }
+        cy += 16.0 + 6.0 + 16.0;
+        let empty = t.value == "—";
+        let vr = text(ui, th, pos2(x0, cy), Align2::LEFT_CENTER, t.value, Role::MonoB, TILE_VALUE, if empty { th.muted } else { th.text });
+        if !empty && t.value != "NIL" {
+            let ur = text(ui, th, pos2(vr.right() + 6.0, cy + 4.0), Align2::LEFT_CENTER, t.unit, Role::Sans, 13.5, th.muted);
+            if t.rounded {
+                text(ui, th, pos2(ur.right() + 8.0, cy + 4.0), Align2::LEFT_CENTER, "2 dp", Role::SansB, 10.88, th.warn);
+            }
+        }
+        cy += 16.0 + 8.0 - 4.0;
+        if let Some(n) = t.note {
+            note(ui, th, pos2(x0, cy + 2.0), Align2::LEFT_TOP, n, tw - 2.0 * TILE_PAD);
+        } else if let Some(hn) = t.hint {
+            paragraph(ui, th, pos2(x0, cy), tw - 2.0 * TILE_PAD, hn, Role::Sans, TILE_HINT, th.muted, 1.3);
+        }
     }
-    if rounded {
-        let total = vw;
-        let x0 = pr.center().x - total / 2.0;
-        let r1 = text(ui, th, pos2(x0, cy), Align2::LEFT_CENTER, value, Role::MonoB, 20.8, fg);
-        text(ui, th, pos2(r1.right() + 6.0, cy + 2.0), Align2::LEFT_CENTER, suffix.trim(), Role::SansB, 10.88, th.warn);
-    } else {
-        text(ui, th, pr.center(), Align2::CENTER_CENTER, value, Role::MonoB, 20.8, fg);
-    }
-    if let Some(n) = note_s {
-        note(ui, th, pos2(pos.x + iw, cy), Align2::RIGHT_CENTER, n, side_w);
-    }
-    h
+    bottom - pos.y
+}
+
+/// Computed values in the worked calculation: tinted with the info hue so they
+/// stand apart from inputs without borrowing the flag/accent colour.
+fn result_chip_colors(th: &Theme) -> (Color32, Color32, Color32) {
+    (th.text, rgba(th.ring, if th.dark { 0.18 } else { 0.12 }), rgba(th.ring, 0.55))
 }
 
 /// Draws one calculation step; returns its height.
@@ -760,7 +883,7 @@ fn draw_step(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, s: &Step, min_h: f32) -
     paint_galley(&p, th, Role::Display, pos2(x + 28.0, y + title_h / 2.0 - tg.size().y / 2.0), tg, title_c);
     let mut head_bottom = y + title_h;
     if let Some(res) = &s.result {
-        let (fg, bgc, bd) = if s.state == StepState::Nil { (th.neutral, th.neutral_bg, th.line_strong) } else { (th.accent_dark, th.accent_soft, th.accent) };
+        let (fg, bgc, bd) = if s.state == StepState::Nil { (th.neutral, th.neutral_bg, th.line_strong) } else { result_chip_colors(th) };
         let radius = pill();
         let rw = text_width(ui, th, res, Role::MonoB, 14.08) + 22.0;
         let fits = one_line && x + 28.0 + tw_used + 6.0 + rw <= x + iw;
@@ -804,7 +927,8 @@ fn draw_step(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, s: &Step, min_h: f32) -
                     text(ui, th, pos2(cx, mid), Align2::LEFT_CENTER, txt, Role::Mono, 12.8, th.muted);
                 }
                 _ => {
-                    chip(ui, th, pos2(cx, mid), Align2::LEFT_CENTER, txt, Role::MonoB, 12.8, th.accent_dark, th.accent_soft, None, vec2(8.0, 1.0), if th.palette == Palette::Pokemon { 7.0 } else { 6.0 });
+                    let (fg, bgc, bd) = result_chip_colors(th);
+                    chip(ui, th, pos2(cx, mid), Align2::LEFT_CENTER, txt, Role::MonoB, 12.8, fg, bgc, Some((1.0, bd)), vec2(8.0, 1.0), if th.palette == Palette::Pokemon { 7.0 } else { 6.0 });
                 }
             }
             cx += iw_item + 5.0;
@@ -874,7 +998,7 @@ impl App {
             }
             ui.memory_mut(|m| m.request_focus(Id::new(("dil", 0usize))));
         }
-        let opts = CardOpts { title: "Dilution", unit: "1:2 diluted → calculated neat (×2)", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0 };
+        let opts = CardOpts { title: "Dilution", unit: "1:2 diluted → calculated neat (×2)", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false };
         let rect = card(ui, th, pos2(origin.x, y), w, &opts, |ui, iw| {
             let o = ui.cursor().min;
             let c1 = iw * 0.30;
@@ -896,15 +1020,15 @@ impl App {
                 text(ui, th, pos2(o.x + 8.0, mid), Align2::LEFT_CENTER, name, Role::SansB, 16.0, th.text);
                 let fw = 130.0_f32.min(c2 - 16.0);
                 let fr = Rect::from_min_size(pos2(o.x + c1 + c2 - 8.0 - fw, y + 10.0), vec2(fw, FIELD_H));
-                let n = parse_number(&self.dil[i]);
-                field(ui, th, fr, Id::new(("dil", i)), &mut self.dil[i], hint, false);
-                let n = if n == Num::Empty { parse_number(&self.dil[i]) } else { parse_number(&self.dil[i]) };
-                let out = match n {
-                    Num::Empty => "—".to_string(),
-                    Num::Invalid => "Invalid".to_string(),
-                    Num::Val(v) => fmt_js(v * 2.0),
+                let invalid = parse_number(&self.dil[i]) == Num::Invalid;
+                field(ui, th, fr, Id::new(("dil", i)), &mut self.dil[i], hint, invalid);
+                // Neat values are results, so plain ink; only an unusable entry is red.
+                let (out, oc) = match parse_number(&self.dil[i]) {
+                    Num::Empty => ("—".to_string(), th.muted),
+                    Num::Invalid => ("Check value".to_string(), th.bad),
+                    Num::Val(v) => (fmt_js(v * 2.0), th.text),
                 };
-                text(ui, th, pos2(o.x + c1 + c2 + c3 - 8.0, mid), Align2::RIGHT_CENTER, &out, Role::MonoB, 16.0, th.accent);
+                text(ui, th, pos2(o.x + c1 + c2 + c3 - 8.0, mid), Align2::RIGHT_CENTER, &out, Role::MonoB, 16.0, oc);
                 y += rh;
                 if i + 1 < DIL_PARAMS.len() {
                     ui.painter().line_segment([pos2(o.x, y - 0.5), pos2(o.x + iw, y - 0.5)], Stroke::new(1.0, th.line));

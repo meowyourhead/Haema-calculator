@@ -7,7 +7,7 @@ const NOTE: &str = "In specimens with a low hematocrit, the percentage of reticu
 const ROW_H: f32 = 40.0;
 
 pub fn reference_card(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32) -> f32 {
-    let opts = CardOpts { title: "Reference", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0 };
+    let opts = CardOpts { title: "Reference", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false };
     let rect = card(ui, th, pos, w, &opts, |ui, iw| {
         let o = ui.cursor().min;
         let tw = iw.max(960.0);

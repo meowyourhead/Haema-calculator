@@ -28,7 +28,11 @@ See `RELEASING.md` for the commit, push and release rules used by this project.
 - Frameless window with a centered title bar: **FBC / Retic / PT / APTT / Dilution** tabs plus
   custom minimize / maximize / close controls. Drag the empty part of the strip to move the window,
   double-click it to maximize, and drag any edge or corner to resize.
-- The sidebar is now just the theme / palette controls (the page tabs live in the title bar).
+- A **Theme** button in the title bar opens the dark-mode switch and palette list (Esc or a
+  click elsewhere closes it), so results use the full window width.
+- Each checker leads with an overall status (✓ All acceptable / ! Review HGB / what to enter
+  next). A flagged card gets a flag-coloured edge and a "Review" tag, and the run that disagrees
+  is outlined. Statuses always pair a shape with their colour; red is used only for flags.
 - Fox application icon embedded in the `.exe`, so it also appears in the taskbar, Alt+Tab and any
   shortcut to the program.
 - **Tab** / **Enter** move to the next input field and **Shift+Tab** / **Shift+Enter** to the
@@ -137,5 +141,5 @@ python tools/make_cyberpunk_backdrop.py
 
 The palette can still be rendered for verification through the screenshot harness
 (`HAEM_SCENE="palette=cyberpunk,dark=1"`). To re-enable it in the app, add the
-`(Palette::Cyberpunk, "Cyberpunk")` row back to the palette list in `App::sidebar` and
-restore the fourth row in its height calculation.
+`(Palette::Cyberpunk, "Cyberpunk")` row back to the palette list in `App::menu_body` and
+change the row count in `menu_content_h` from 3 to 4.

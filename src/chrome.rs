@@ -58,7 +58,8 @@ fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
         .map(|(_, label)| text_width(ui, th, label, Role::SansB, TAB_FONT).ceil() + TAB_PAD * 2.0)
         .collect();
     let total_w = widths.iter().sum::<f32>() + TAB_GAP * (TABS.len() - 1) as f32;
-    let controls_left = rect.right() - (CLOSE_W + BTN_W * 2.0);
+    let theme_w = text_width(ui, th, "Theme", Role::SansB, 12.5).ceil() + 52.0;
+    let controls_left = rect.right() - (CLOSE_W + BTN_W * 2.0 + theme_w + 8.0);
     let min_x = rect.left() + 12.0;
     let max_x = (controls_left - total_w - 12.0).max(min_x);
     let mut x = (rect.center().x - total_w / 2.0).clamp(min_x, max_x);
@@ -104,11 +105,18 @@ fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
+    // --- theme menu button (opens the palette / dark-mode popover) -------
+    let theme_btn = Rect::from_min_max(pos2(minimize.left() - 8.0 - theme_w, btn_top + 6.0), pos2(minimize.left() - 8.0, btn_top + CHROME_H - 6.0));
+    if theme_button(ui, th, theme_btn, app.menu_open).clicked() {
+        app.menu_open = !app.menu_open;
+    }
+    app.menu_btn = theme_btn;
+
     // --- drag areas (either side of the centred tab group) ---------------
     let first_tab = draws.first().map(|d| d.rect.left()).unwrap_or(rect.left());
     let drag_rects = [
         (Id::new("chrome-drag-left"), Rect::from_min_max(pos2(rect.left(), rect.top()), pos2(first_tab, rect.bottom()))),
-        (Id::new("chrome-drag"), Rect::from_min_max(pos2(tabs_right, rect.top()), pos2(minimize.left(), rect.bottom()))),
+        (Id::new("chrome-drag"), Rect::from_min_max(pos2(tabs_right, rect.top()), pos2(theme_btn.left(), rect.bottom()))),
     ];
     for (id, drag_rect) in drag_rects {
         if drag_rect.width() <= 0.0 {
@@ -325,6 +333,57 @@ fn caption(ui: &mut Ui, th: &Theme, rect: Rect, id: &'static str, kind: Caption)
         Caption::Close => "Close",
     };
     resp.on_hover_text(tip)
+}
+
+/// "◇ Theme ▾": the current palette's swatch, a label and a caret. Settings
+/// live here rather than in a permanent rail beside the results.
+fn theme_button(ui: &mut Ui, th: &Theme, rect: Rect, open: bool) -> Response {
+    let resp = ui.interact(rect, Id::new("chrome-theme"), Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let p = ui.painter();
+    let fg = if th.palette == Palette::Genshin { hex(0xece5d8) } else { th.text };
+    let r = match th.palette {
+        Palette::Pokemon => 14.0,
+        Palette::Cyberpunk => 0.0,
+        Palette::Genshin => pill(),
+        Palette::Default => 8.0,
+    };
+    if open || resp.hovered() {
+        let a = if open { 1.6 } else { 1.0 };
+        let c = match th.palette {
+            Palette::Genshin => rgba(hex(0xcbba8c), 0.16 * a),
+            Palette::Cyberpunk => rgba(th.ring, 0.12 * a),
+            _ => rgba(th.text, 0.075 * a),
+        };
+        fill(p, rect, r, c);
+    }
+    let border = match th.palette {
+        Palette::Genshin => rgba(hex(0xd3bc8e), 0.55),
+        Palette::Pokemon => rgba(th.ring, 0.55),
+        Palette::Cyberpunk => rgba(th.ring, 0.45),
+        Palette::Default => th.line_strong,
+    };
+    stroke_in(p, rect, r, 1.0, border);
+    let sc = pos2(rect.left() + 16.0, rect.center().y);
+    match th.palette {
+        Palette::Default => {
+            p.circle_filled(sc, 5.5, th.line_strong);
+            p.circle_filled(sc, 4.5, th.surface);
+            p.circle_filled(sc, 2.8, th.accent);
+        }
+        Palette::Genshin => diamond(p, sc, 5.0, hex(0xd3bc8e), Stroke::NONE),
+        Palette::Pokemon => pokeball(p, sc, 11.0, th.ink, th.accent, Color32::WHITE),
+        Palette::Cyberpunk => cyber_chip(p, sc, 10.0, th.accent, th.accent, th.on_accent),
+    }
+    text(ui, th, pos2(rect.left() + 28.0, rect.center().y), Align2::LEFT_CENTER, "Theme", Role::SansB, 12.5, fg);
+    // caret, flipped while open
+    let cx = rect.right() - 13.0;
+    let cy = rect.center().y;
+    let d = if open { -2.0 } else { 2.0 };
+    p.add(egui::Shape::line(vec![pos2(cx - 3.5, cy - d), pos2(cx, cy + d), pos2(cx + 3.5, cy - d)], Stroke::new(1.4_f32, fg)));
+    resp.on_hover_text("Colour theme and dark mode")
 }
 
 // ---------------------------------------------------------------------------

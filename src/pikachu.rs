@@ -42,13 +42,18 @@ pub enum PerchKind {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Perch {
-    id: Id,
-    x0: f32,
-    x1: f32,
-    y: f32,
-    kind: PerchKind,
-    pressed: bool,
+pub(crate) struct Perch {
+    pub(crate) id: Id,
+    pub(crate) x0: f32,
+    pub(crate) x1: f32,
+    pub(crate) y: f32,
+    pub(crate) kind: PerchKind,
+    pub(crate) pressed: bool,
+}
+
+/// This frame's perches (shared with the Genshin mascot).
+pub(crate) fn perches(ctx: &egui::Context) -> Vec<Perch> {
+    ctx.data(|d| d.get_temp(key())).unwrap_or_default()
 }
 
 fn key() -> Id {
@@ -90,7 +95,7 @@ pub fn perch(ui: &Ui, id: Id, rect: Rect, kind: PerchKind, pressed: bool) {
     });
 }
 
-fn find(perches: &[Perch], id: Id) -> Option<Perch> {
+pub(crate) fn find(perches: &[Perch], id: Id) -> Option<Perch> {
     perches.iter().find(|p| p.id == id).copied()
 }
 
