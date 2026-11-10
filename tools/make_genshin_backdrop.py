@@ -1,7 +1,7 @@
 """Bake the Genshin theme's blurred page backdrop.
 
 The source is the ``Inventory / No items`` screenshot in
-``Game UI Database - Genshin Impact (Console).mhtml``: a deliberately blurred
+``references/genshin/Game UI Database - Genshin Impact (Console).mhtml``: a deliberately blurred
 in-game landscape with a cream/navy UI veil.  We crop away the HUD, paint over
 the "No items" caption, blur the remainder and store a tiny raw RGBA texture
 that is compiled into the executable (no runtime image decoder needed).
@@ -22,7 +22,7 @@ import re
 from PIL import Image, ImageEnhance, ImageFilter
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-MHTML = ROOT / "Game UI Database - Genshin Impact (Console).mhtml"
+MHTML = ROOT / "references" / "genshin" / "Game UI Database - Genshin Impact (Console).mhtml"
 OUT = ROOT / "assets" / "genshin-backdrop.rgba"
 PREVIEW = ROOT / "shots" / "genshin-backdrop-preview.png"
 

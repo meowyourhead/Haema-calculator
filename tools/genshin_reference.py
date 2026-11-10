@@ -21,7 +21,7 @@ import re
 from PIL import Image, ImageDraw
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-MHTML = ROOT / "Game UI Database - Genshin Impact (Console).mhtml"
+MHTML = ROOT / "references" / "genshin" / "Game UI Database - Genshin Impact (Console).mhtml"
 
 TILE_W, TILE_H = 380, 214
 COLS = 5

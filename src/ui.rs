@@ -108,12 +108,87 @@ pub fn pokemon_backdrop_texture(ctx: &egui::Context) -> egui::TextureHandle {
     ctx.load_texture("pokemon-backdrop", image, egui::TextureOptions::LINEAR)
 }
 
+/// The Cyberpunk backdrop: a blurred magenta/cyan Night City corridor.
+pub fn cyberpunk_backdrop_texture(ctx: &egui::Context) -> egui::TextureHandle {
+    const W: usize = 192;
+    const H: usize = 108;
+    let pixels = include_bytes!("../assets/cyberpunk-backdrop.rgba");
+    let image = egui::ColorImage::from_rgba_unmultiplied([W, H], pixels);
+    ctx.load_texture("cyberpunk-backdrop", image, egui::TextureOptions::LINEAR)
+}
+
 pub fn fill(p: &Painter, rect: Rect, r: f32, c: Color32) {
     p.rect_filled(rect, cr(r), c);
 }
 
 pub fn stroke_in(p: &Painter, rect: Rect, r: f32, w: f32, c: Color32) {
     p.rect_stroke(rect, cr(r), Stroke::new(w, c), StrokeKind::Inside);
+}
+
+/// Octagonal silhouette with the top-right and bottom-left corners clipped.
+/// This is the Cyberpunk panel/button shape; other palettes keep rounded rects.
+pub fn chamfer_points(rect: Rect, cut: f32) -> Vec<Pos2> {
+    let c = cut.min(rect.width() * 0.30).min(rect.height() * 0.40).max(0.0);
+    vec![
+        pos2(rect.left(), rect.top()),
+        pos2(rect.right() - c, rect.top()),
+        pos2(rect.right(), rect.top() + c),
+        pos2(rect.right(), rect.bottom()),
+        pos2(rect.left() + c, rect.bottom()),
+        pos2(rect.left(), rect.bottom() - c),
+    ]
+}
+
+pub fn cyber_fill(p: &Painter, rect: Rect, cut: f32, c: Color32) {
+    p.add(Shape::convex_polygon(chamfer_points(rect, cut), c, Stroke::NONE));
+}
+
+pub fn cyber_stroke(p: &Painter, rect: Rect, cut: f32, w: f32, c: Color32) {
+    p.add(Shape::closed_line(chamfer_points(rect, cut), Stroke::new(w, c)));
+}
+
+/// Filled + outlined Cyberpunk panel.
+pub fn cyber_panel(p: &Painter, rect: Rect, cut: f32, fill_c: Color32, border_w: f32, border_c: Color32) {
+    cyber_fill(p, rect, cut, fill_c);
+    if border_w > 0.0 && border_c != Color32::TRANSPARENT {
+        cyber_stroke(p, rect, cut, border_w, border_c);
+    }
+}
+
+/// Header band of a chamfered card: follows the top-right cut, square below.
+pub fn cyber_band(rect: Rect, cut: f32, h: f32, c: Color32) -> Shape {
+    let top = rect.top();
+    let right = rect.right();
+    let left = rect.left();
+    Shape::convex_polygon(
+        vec![
+            pos2(left, top),
+            pos2(right - cut, top),
+            pos2(right, top + cut),
+            pos2(right, top + h),
+            pos2(left, top + h),
+        ],
+        c,
+        Stroke::NONE,
+    )
+}
+
+/// Left colour bar of a chamfered card: follows the bottom-left cut.
+pub fn cyber_bar(rect: Rect, cut: f32, w: f32, c: Color32) -> Shape {
+    let left = rect.left();
+    let top = rect.top();
+    let bottom = rect.bottom();
+    Shape::convex_polygon(
+        vec![
+            pos2(left, top),
+            pos2(left + w, top),
+            pos2(left + w, bottom),
+            pos2(left + cut, bottom),
+            pos2(left, bottom - cut),
+        ],
+        c,
+        Stroke::NONE,
+    )
 }
 
 pub fn diamond(p: &Painter, c: Pos2, half: f32, fill_c: Color32, stroke: Stroke) {
@@ -146,6 +221,81 @@ pub fn star(p: &Painter, c: Pos2, size: f32, color: Color32) {
     m.add_triangle(12, 13, 14);
     m.add_triangle(12, 14, 15);
     p.add(Shape::mesh(m));
+}
+
+/// Horizontal gradient strip (the feathered tail of a Genshin settings row).
+pub fn h_gradient(p: &Painter, rect: Rect, left: Color32, right: Color32) {
+    let mut m = Mesh::default();
+    m.colored_vertex(rect.left_top(), left);
+    m.colored_vertex(rect.right_top(), right);
+    m.colored_vertex(rect.right_bottom(), right);
+    m.colored_vertex(rect.left_bottom(), left);
+    m.add_triangle(0, 1, 2);
+    m.add_triangle(0, 2, 3);
+    p.add(Shape::mesh(m));
+}
+
+/// The Genshin dialog frame: an inset champagne hairline plus the small
+/// L-shaped corner brackets with diamond terminals that every in-game popup
+/// (Replenish Resin, Craft, Edit Nickname) carries at its four corners.
+pub fn genshin_frame(p: &Painter, th: &Theme, rect: Rect, r: f32) {
+    let gold = th.gold;
+    let inset = rect.shrink(4.0);
+    stroke_in(p, inset, (r - 3.0).max(1.0), 1.0, rgba(gold, if th.dark { 0.34 } else { 0.55 }));
+    let arm = 11.0;
+    let st = Stroke::new(1.5, gold);
+    let o = 1.5; // brackets sit just outside the panel edge
+    for (cx, cy, sx, sy) in [
+        (rect.left() - o, rect.top() - o, 1.0, 1.0),
+        (rect.right() + o, rect.top() - o, -1.0, 1.0),
+        (rect.left() - o, rect.bottom() + o, 1.0, -1.0),
+        (rect.right() + o, rect.bottom() + o, -1.0, -1.0),
+    ] {
+        let c = pos2(cx, cy);
+        p.line_segment([c + vec2(3.0 * sx, 0.0), c + vec2(arm * sx, 0.0)], st);
+        p.line_segment([c + vec2(0.0, 3.0 * sy), c + vec2(0.0, arm * sy)], st);
+        diamond(p, c, 2.6, gold, Stroke::NONE);
+    }
+}
+
+/// Glyph inside a Genshin button's leading icon disc.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GIcon {
+    Confirm,
+    Cancel,
+    Plus,
+    Minus,
+}
+
+/// The circular controller-prompt disc on the left of every Genshin button:
+/// a gold ring for confirm-type actions and a pale-blue ✕ for cancel/reset.
+pub fn genshin_icon(p: &Painter, c: Pos2, r: f32, icon: GIcon, plate: Color32) {
+    match icon {
+        GIcon::Cancel => {
+            p.circle_filled(c, r, crate::theme::hex(0x6a9fe0));
+            let k = r * 0.42;
+            let st = Stroke::new(1.6, Color32::WHITE);
+            p.line_segment([c + vec2(-k, -k), c + vec2(k, k)], st);
+            p.line_segment([c + vec2(-k, k), c + vec2(k, -k)], st);
+        }
+        _ => {
+            p.circle_filled(c, r, crate::theme::hex(0xf5c443));
+            let ink = crate::theme::hex(0x3b4255);
+            match icon {
+                GIcon::Plus | GIcon::Minus => {
+                    let k = r * 0.5;
+                    let st = Stroke::new(1.8, ink);
+                    p.line_segment([c + vec2(-k, 0.0), c + vec2(k, 0.0)], st);
+                    if icon == GIcon::Plus {
+                        p.line_segment([c + vec2(0.0, -k), c + vec2(0.0, k)], st);
+                    }
+                }
+                _ => {
+                    p.circle_filled(c, r * 0.55, plate);
+                }
+            }
+        }
+    }
 }
 
 /// Radial glow (used for the Genshin page background).
@@ -204,6 +354,21 @@ pub fn moon_icon(p: &Painter, c: Pos2, color: Color32) {
     p.add(Shape::line(pts, Stroke::new(2.0 * k, color)));
 }
 
+/// Small chamfered data-chip used by the Cyberpunk palette swatch.
+pub fn cyber_chip(p: &Painter, c: Pos2, size: f32, fill: Color32, stroke: Color32, dot: Color32) {
+    let h = size / 2.0;
+    let cut = (size * 0.26).max(1.0);
+    let pts = vec![
+        pos2(c.x - h, c.y - h),
+        pos2(c.x + h - cut, c.y - h),
+        pos2(c.x + h, c.y - h + cut),
+        pos2(c.x + h, c.y + h),
+        pos2(c.x - h, c.y + h),
+    ];
+    p.add(Shape::convex_polygon(pts, fill, Stroke::new(1.0_f32, stroke)));
+    p.rect_filled(Rect::from_center_size(c, vec2(size * 0.30, size * 0.30)), 0.0, dot);
+}
+
 /// 12×12 pixel pokéball.
 pub fn pokeball(p: &Painter, c: Pos2, size: f32, ink: Color32, red: Color32, white: Color32) {
     let r = size / 2.0;
@@ -235,14 +400,38 @@ pub enum Btn {
 
 pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) -> Response {
     let small = matches!(kind, Btn::Mini | Btn::MiniMuted);
+    let label = if th.palette == Palette::Cyberpunk { label.to_uppercase() } else { label.to_string() };
+    // Genshin buttons lead with a controller-prompt disc; a "+ " / "− " prefix
+    // moves into that disc instead of staying in the label.
+    let g_icon = if th.palette == Palette::Genshin && !small {
+        Some(if label.starts_with("+ ") {
+            GIcon::Plus
+        } else if label.starts_with("− ") {
+            GIcon::Minus
+        } else if kind == Btn::Secondary {
+            GIcon::Cancel
+        } else {
+            GIcon::Confirm
+        })
+    } else {
+        None
+    };
+    let label = match g_icon {
+        Some(GIcon::Plus | GIcon::Minus) => label.chars().skip(2).collect::<String>(),
+        _ => label,
+    };
+    let label = label.as_str();
     let (size, role, pad_x, h) = if small { (12.8, Role::SansB, 12.0, 32.0) } else { (13.44, Role::SansB, 14.0, 36.0) };
-    let tw = text_width(ui, th, label, role, size);
-    let (rect, resp) = ui.allocate_exact_size(vec2(tw + pad_x * 2.0 + 2.0, h), if enabled { Sense::click() } else { Sense::hover() });
+    let ls = if th.palette == Palette::Cyberpunk { 0.05 } else { 0.0 };
+    let tw = text_width(ui, th, label, role, size) + ls * size * label.chars().count() as f32;
+    let icon_w = if g_icon.is_some() { 24.0 } else { 0.0 };
+    let (rect, resp) = ui.allocate_exact_size(vec2(tw + icon_w + pad_x * 2.0 + 2.0, h), if enabled { Sense::click() } else { Sense::hover() });
     if enabled {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
     }
     let hovered = enabled && resp.hovered();
     let pressed = enabled && resp.is_pointer_button_down_on();
+    crate::pikachu::perch(ui, resp.id, rect, crate::pikachu::PerchKind::Top, pressed);
     let p = ui.painter();
     let off = if pressed { 1.0 } else { 0.0 };
     let rect = rect.translate(vec2(0.0, off));
@@ -260,58 +449,88 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
     let mut border_w = 1.0;
     match th.palette {
         Palette::Genshin => {
+            // In-game dialog buttons: every action is the same pill and the
+            // leading disc says what it does. Slate plates with cream type sit
+            // on parchment (light); cream plates with slate type sit on the
+            // dark slate screens. Hover is the game's soft white halo.
             radius = pill();
+            let slate = crate::theme::hex(0x4a5366);
+            let cream = crate::theme::hex(0xece5d8);
+            let (plate, ink) = if th.dark { (cream, slate) } else { (slate, cream) };
             match kind {
-                Btn::Primary => {
-                    border = rgba(th.gold, 0.55);
-                    if hovered {
-                        bg = crate::theme::mix(0.9, th.accent, Color32::WHITE);
-                        border = th.gold;
-                        glow = Some(rgba(th.gold, 0.38));
-                    }
-                    if pressed {
-                        bg = crate::theme::mix(0.78, th.gold, th.accent);
+                Btn::Primary | Btn::Secondary => {
+                    bg = if pressed {
+                        crate::theme::mix(0.86, plate, Color32::BLACK)
+                    } else if hovered {
+                        crate::theme::mix(0.90, plate, Color32::WHITE)
                     } else {
-                        ledge = Some(Shape::rect_filled(rect.translate(vec2(0.0, 2.0)), cr(radius), Color32::from_black_alpha(56)));
-                    }
-                }
-                Btn::Secondary => {
-                    // On the dark navy surface a cream wash leaves cream text
-                    // on a cream plate. Use a dark translucent plate instead,
-                    // with a bright rim, so the label stays legible.
-                    if th.dark {
-                        bg = Color32::from_black_alpha(if hovered { 72 } else { 46 });
-                        border = if hovered { th.gold } else { rgba(th.accent, 0.62) };
-                    } else {
-                        bg = rgba(th.accent, if hovered { 0.24 } else { 0.14 });
-                        border = if hovered { th.gold } else { rgba(th.accent, 0.52) };
-                    }
-                    fg = th.text;
-                    if hovered {
-                        glow = Some(rgba(th.gold, 0.34));
-                    }
+                        plate
+                    };
+                    border = if th.dark { rgba(Color32::WHITE, 0.55) } else { rgba(th.gold, 0.40) };
+                    fg = ink;
                 }
                 Btn::Soft => {
-                    // "Show calculations" style: outlined gold pill on a dark
-                    // plate in dark mode, warm tinted plate in light mode.
+                    bg = if hovered { rgba(plate, 0.30) } else { rgba(plate, 0.16) };
                     if th.dark {
-                        bg = Color32::from_black_alpha(if hovered { 78 } else { 52 });
-                        border = if hovered { th.gold } else { rgba(th.gold, 0.80) };
-                    } else {
-                        bg = rgba(th.gold, if hovered { 0.34 } else { 0.20 });
-                        border = if hovered { th.gold } else { rgba(th.gold, 0.70) };
+                        bg = if hovered { Color32::from_black_alpha(96) } else { Color32::from_black_alpha(64) };
                     }
+                    border = if hovered { th.gold } else { rgba(th.gold, 0.85) };
                     fg = th.text;
-                    if hovered {
-                        glow = Some(rgba(th.gold, 0.36));
-                    }
                 }
                 Btn::Mini | Btn::MiniMuted => {
                     border = if hovered { th.gold } else { rgba(th.gold, 0.78) };
                     bg = if hovered { rgba(th.gold, 0.22) } else { Color32::TRANSPARENT };
+                }
+            }
+            if hovered {
+                glow = Some(rgba(Color32::WHITE, if th.dark { 0.40 } else { 0.60 }));
+            }
+            if enabled && !pressed && !matches!(kind, Btn::Mini | Btn::MiniMuted) {
+                ledge = Some(Shape::from(
+                    Shadow { offset: [0, 2], blur: 6, spread: 0, color: Color32::from_black_alpha(if th.dark { 90 } else { 46 }) }
+                        .as_shape(rect, cr(radius)),
+                ));
+            }
+        }
+        Palette::Cyberpunk => {
+            // Night City controls: clipped rectangles, acid-yellow CTA,
+            // cyan outline for secondary actions, no soft shadows.
+            radius = 0.0;
+            let hot = if th.dark { th.accent_dark } else { th.accent };
+            match kind {
+                Btn::Primary => {
+                    bg = if hovered { th.accent_dark } else { th.accent };
+                    border = th.accent_dark;
+                    fg = th.on_accent;
                     if hovered {
-                        glow = Some(rgba(th.gold, 0.30));
+                        glow = Some(rgba(th.accent, 0.34));
                     }
+                }
+                Btn::Secondary => {
+                    bg = if hovered { rgba(th.ring, 0.14) } else { rgba(th.surface, 0.55) };
+                    border = if hovered { th.ring } else { rgba(th.ring, 0.55) };
+                    fg = th.text;
+                    if hovered {
+                        glow = Some(rgba(th.ring, 0.22));
+                    }
+                }
+                Btn::Soft => {
+                    bg = rgba(th.accent, if hovered { 0.18 } else { 0.09 });
+                    border = if hovered { th.accent } else { rgba(th.accent, 0.72) };
+                    fg = hot;
+                    if hovered {
+                        glow = Some(rgba(th.accent, 0.26));
+                    }
+                }
+                Btn::Mini => {
+                    bg = if hovered { rgba(th.ring, 0.14) } else { Color32::TRANSPARENT };
+                    border = if hovered { th.ring } else { rgba(th.ring, 0.55) };
+                    fg = if hovered { th.ring } else { th.text };
+                }
+                Btn::MiniMuted => {
+                    bg = if hovered { rgba(th.text, 0.08) } else { Color32::TRANSPARENT };
+                    border = if hovered { th.line_strong } else { th.line };
+                    fg = th.muted;
                 }
             }
         }
@@ -364,14 +583,38 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
         p.add(s);
     }
     if let Some(g) = glow {
-        p.rect_stroke(rect.expand(1.5), cr(radius + 1.5), Stroke::new(3.0, g), StrokeKind::Middle);
+        if th.palette == Palette::Cyberpunk {
+            p.add(Shape::closed_line(
+                chamfer_points(rect.expand(2.0), 8.0),
+                Stroke::new(3.0, g),
+            ));
+        } else {
+            p.rect_stroke(rect.expand(1.5), cr(radius + 1.5), Stroke::new(3.0, g), StrokeKind::Middle);
+        }
     }
-    fill(p, rect, radius, dim(bg));
-    stroke_in(p, rect, radius, border_w, dim(border));
-    if th.palette == Palette::Genshin && matches!(kind, Btn::Primary) && !pressed {
-        p.line_segment([rect.left_top() + vec2(radius.min(rect.height() / 2.0), 1.0), rect.right_top() + vec2(-radius.min(rect.height() / 2.0), 1.0)], Stroke::new(1.0, Color32::from_white_alpha(110)));
+    if th.palette == Palette::Cyberpunk {
+        let cut = if small { 5.0 } else { 6.0 };
+        cyber_panel(p, rect, cut, dim(bg), border_w, dim(border));
+        // A yellow data tick on the leading edge ties the control to the HUD.
+        let tick = if matches!(kind, Btn::Primary) { rgba(th.on_accent, 0.55) } else { rgba(th.accent, 0.85) };
+        p.line_segment(
+            [rect.left_top() + vec2(2.0, cut + 3.0), rect.left_bottom() + vec2(2.0, -4.0)],
+            Stroke::new(2.0_f32, tick),
+        );
+    } else {
+        fill(p, rect, radius, dim(bg));
+        stroke_in(p, rect, radius, border_w, dim(border));
     }
-    text(ui, th, rect.center(), Align2::CENTER_CENTER, label, role, size, dim(fg));
+    if let Some(icon) = g_icon {
+        let c = pos2(rect.left() + 19.0, rect.center().y);
+        let core = if bg.a() == 255 { bg } else { crate::theme::hex(0x4a5366) };
+        genshin_icon(p, c, 9.0, icon, dim(core));
+        text(ui, th, pos2(rect.left() + 36.0, rect.center().y), Align2::LEFT_CENTER, label, role, size, dim(fg));
+    } else if th.palette == Palette::Cyberpunk {
+        text_ls(ui, th, rect.center(), Align2::CENTER_CENTER, label, role, size, dim(fg), ls);
+    } else {
+        text(ui, th, rect.center(), Align2::CENTER_CENTER, label, role, size, dim(fg));
+    }
     resp
 }
 
@@ -385,7 +628,11 @@ pub const LABEL_GAP: f32 = 7.0;
 
 /// Uppercase caption above a control.
 pub fn label(ui: &Ui, th: &Theme, pos: Pos2, s: &str) {
-    text_ls(ui, th, pos, Align2::LEFT_TOP, &s.to_uppercase(), Role::SansB, 10.88, th.muted, 0.03);
+    if th.palette == Palette::Cyberpunk {
+        text_ls(ui, th, pos, Align2::LEFT_TOP, &s.to_uppercase(), Role::MonoB, 10.56, th.muted, 0.08);
+    } else {
+        text_ls(ui, th, pos, Align2::LEFT_TOP, &s.to_uppercase(), Role::SansB, 10.88, th.muted, 0.03);
+    }
 }
 
 /// Number field at an exact rectangle. Returns whether the text changed.
@@ -405,14 +652,27 @@ pub fn field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hi
     }
     let p = ui.painter().clone();
     let pk = th.palette == Palette::Pokemon;
-    let r = if pk { 12.0 } else { th.radius };
+    let cyber = th.palette == Palette::Cyberpunk;
+    let gen = th.palette == Palette::Genshin;
+    let r = if pk { 12.0 } else if cyber { 0.0 } else if gen { pill() } else { th.radius };
     let (mut bg, mut border) = if focused { (th.surface, th.accent) } else { (th.bg, th.line_strong) };
+    // Genshin entry boxes are the bright ivory capsule of "Edit Nickname":
+    // ivory on parchment, cream on the slate screens, slate ink in both.
+    let mut ink = th.text;
+    let mut hint_c = th.muted;
+    if gen {
+        bg = if th.dark { crate::theme::hex(0xece5d8) } else { crate::theme::hex(0xf8f4ec) };
+        border = if focused { th.gold } else if th.dark { rgba(Color32::WHITE, 0.0) } else { rgba(crate::theme::hex(0x4a5366), 0.26) };
+        ink = crate::theme::hex(0x3b4255);
+        hint_c = crate::theme::hex(0x7a7f8c);
+    }
     if pk {
         bg = th.field;
         border = if focused { th.ring } else { th.line_strong };
     }
-    if th.palette == Palette::Genshin && focused {
-        border = th.gold;
+    if cyber {
+        bg = th.field;
+        border = if focused { th.ring } else { th.line_strong };
     }
     if invalid {
         border = th.bad;
@@ -420,23 +680,48 @@ pub fn field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hi
     }
     if focused {
         let ring = match th.palette {
-            Palette::Genshin => rgba(th.gold, 0.30),
+            Palette::Genshin => rgba(th.gold, 0.45),
             Palette::Pokemon => rgba(th.ring, 0.30),
+            Palette::Cyberpunk => rgba(th.ring, 0.30),
             _ => rgba(th.ring, 0.25),
         };
-        p.rect_stroke(rect.expand(1.5), cr(r + 1.5), Stroke::new(3.0, ring), StrokeKind::Middle);
+        if cyber {
+            p.add(Shape::closed_line(chamfer_points(rect.expand(2.0), 6.0), Stroke::new(3.0, ring)));
+        } else {
+            p.rect_stroke(rect.expand(1.5), cr(r + 1.5), Stroke::new(3.0, ring), StrokeKind::Middle);
+        }
     }
-    fill(&p, rect, r, bg);
-    if pk && !focused {
-        // soft top highlight instead of the old pixel inset
+    if cyber {
+        cyber_panel(&p, rect, 4.0, bg, 1.0, border);
+        if focused {
+            p.rect_filled(Rect::from_min_size(rect.min + vec2(0.0, 4.0), vec2(2.0, rect.height() - 8.0)), 0.0, th.accent);
+        }
+        // faint top scanline inside the data cell
         p.line_segment(
-            [rect.left_top() + vec2(8.0, 1.0), rect.right_top() + vec2(-8.0, 1.0)],
-            Stroke::new(1.0, rgba(th.line_strong, 0.35)),
+            [rect.left_top() + vec2(8.0, 2.0), rect.right_top() + vec2(-8.0, 2.0)],
+            Stroke::new(1.0_f32, rgba(th.ring, if focused { 0.28 } else { 0.10 })),
         );
+    } else {
+        fill(&p, rect, r, bg);
+        if pk && !focused {
+            // soft top highlight instead of the old pixel inset
+            p.line_segment(
+                [rect.left_top() + vec2(8.0, 1.0), rect.right_top() + vec2(-8.0, 1.0)],
+                Stroke::new(1.0, rgba(th.line_strong, 0.35)),
+            );
+        }
+        if gen && !invalid {
+            // faint inner shade along the top edge, like an inset capsule
+            p.line_segment(
+                [rect.left_top() + vec2(r.min(rect.height() / 2.0), 1.5), rect.right_top() + vec2(-r.min(rect.height() / 2.0), 1.5)],
+                Stroke::new(1.0, Color32::from_black_alpha(18)),
+            );
+        }
+        stroke_in(&p, rect, r, if pk { 1.5 } else { 1.0 }, border);
     }
-    stroke_in(&p, rect, r, if pk { 1.5 } else { 1.0 }, border);
 
-    let inner = Rect::from_min_max(rect.min + vec2(11.0, 1.0), rect.max - vec2(11.0, 1.0));
+    let pad = if gen { 18.0 } else { 11.0 };
+    let inner = Rect::from_min_max(rect.min + vec2(pad, 1.0), rect.max - vec2(pad, 1.0));
     let mut child = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Center)));
     let font = th.font(Role::Mono, 14.72);
     let before = value.clone();
@@ -448,8 +733,8 @@ pub fn field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hi
             .margin(Margin::ZERO)
             .desired_width(inner.width())
             .font(font)
-            .text_color(th.text)
-            .hint_text(RichText::new(hint).color(th.muted))
+            .text_color(if invalid { th.text } else { ink })
+            .hint_text(RichText::new(hint).color(hint_c))
             .vertical_align(Align::Center),
     );
     value.retain(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'));
@@ -474,9 +759,14 @@ pub fn chip(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, s: &str, role: Role,
     let size_v = g.size() + pad * 2.0 + vec2(0.0, 0.0);
     let rect = anchor.anchor_size(pos, size_v);
     let p = ui.painter();
-    fill(p, rect, radius, bg);
-    if let Some((w, c)) = border {
-        stroke_in(p, rect, radius, w, c);
+    if th.palette == Palette::Cyberpunk {
+        let (bw, bc) = border.unwrap_or((0.0, Color32::TRANSPARENT));
+        cyber_panel(p, rect, 4.0, bg, bw, bc);
+    } else {
+        fill(p, rect, radius, bg);
+        if let Some((w, c)) = border {
+            stroke_in(p, rect, radius, w, c);
+        }
     }
     paint_galley(p, th, role, rect.min + pad, g, fg);
     rect
@@ -484,11 +774,14 @@ pub fn chip(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, s: &str, role: Role,
 
 /// Status dot + label ("Acceptable" etc.), right-aligned at `right_mid`.
 pub fn badge(ui: &Ui, th: &Theme, right_mid: Pos2, s: &str, color: Color32) -> f32 {
-    let g = galley(ui, th, s, Role::SansB, 11.52, color, 0.0, f32::INFINITY);
+    let label = if th.palette == Palette::Cyberpunk { s.to_uppercase() } else { s.to_string() };
+    let g = galley(ui, th, &label, Role::SansB, 11.52, color, 0.0, f32::INFINITY);
     let w = g.size().x + 12.0;
     let left = right_mid.x - w;
     let p = ui.painter();
-    if th.palette == Palette::Pokemon {
+    if th.palette == Palette::Cyberpunk {
+        p.rect_filled(Rect::from_center_size(pos2(left + 3.0, right_mid.y), vec2(3.0, 9.0)), 0.0, color);
+    } else if th.palette == Palette::Pokemon {
         p.rect_filled(Rect::from_center_size(pos2(left + 3.0, right_mid.y), vec2(7.0, 7.0)), 2.0, color);
     } else {
         p.circle_filled(pos2(left + 3.0, right_mid.y), 3.0, color);
@@ -508,9 +801,14 @@ pub fn note(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, s: &str, max_w: f32)
     let g = ui.fonts(|f| f.layout_job(job));
     let size = g.size() + vec2(20.0, 8.0);
     let rect = anchor.anchor_size(pos, size);
-    let r = if th.palette == Palette::Pokemon { 12.0 } else { 6.0 };
-    fill(ui.painter(), rect, r, th.warn_bg);
-    stroke_in(ui.painter(), rect, r, 1.0, th.warn);
+    if th.palette == Palette::Cyberpunk {
+        cyber_panel(ui.painter(), rect, 5.0, th.warn_bg, 1.0, th.warn);
+        ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(2.0, rect.height())), 0.0, th.warn);
+    } else {
+        let r = if th.palette == Palette::Pokemon { 12.0 } else { 6.0 };
+        fill(ui.painter(), rect, r, th.warn_bg);
+        stroke_in(ui.painter(), rect, r, 1.0, th.warn);
+    }
     paint_galley(ui.painter(), th, Role::SansB, rect.min + vec2(10.0, 4.0), g, th.warn);
     rect
 }
@@ -554,6 +852,10 @@ pub fn card_shadow(p: &Painter, th: &Theme, rect: Rect, r: f32) -> Shape {
             .as_shape(rect, cr(r)),
         );
     }
+    if th.palette == Palette::Genshin {
+        let c = if th.dark { Color32::from_black_alpha(110) } else { Color32::from_rgba_unmultiplied(40, 46, 60, 54) };
+        return Shape::from(Shadow { offset: [0, 4], blur: 14, spread: 0, color: c }.as_shape(rect, cr(r)));
+    }
     let c = match (th.palette, th.dark) {
         (Palette::Genshin, false) => Color32::from_rgba_unmultiplied(59, 71, 92, 36),
         (_, true) => Color32::from_black_alpha(90),
@@ -567,25 +869,55 @@ pub fn card_shadow(p: &Painter, th: &Theme, rect: Rect, r: f32) -> Shape {
 /// Returns the final rectangle (the body decides the height, `min_height` stretches).
 pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: impl FnOnce(&mut Ui, f32)) -> Rect {
     let r = th.radius_lg;
+    let cyber = th.palette == Palette::Cyberpunk;
     let p = ui.painter().clone();
     let shadow_i = p.add(Shape::Noop);
     let bg_i = p.add(Shape::Noop);
     let band_i = p.add(Shape::Noop);
     let bar_i = p.add(Shape::Noop);
 
-    let bl = if o.bar.is_some() { 4.0 } else { 1.0 };
+    let gen = th.palette == Palette::Genshin;
+    // Genshin cards are framed dialogs; the parameter colour becomes a small
+    // element gem beside the title instead of a coloured left edge.
+    let bl = if o.bar.is_some() && !gen { 4.0 } else { 1.0 };
     let head_y = min.y;
     let title_c = o.title_color.unwrap_or(th.text);
     // header text
-    let tx = min.x + bl + 20.0;
+    let mut tx = min.x + bl + 20.0;
+    if gen {
+        if let Some(b) = o.bar {
+            let gc = pos2(tx + 6.0, head_y + 30.0);
+            diamond(&ui.painter(), gc, 7.5, th.gold, Stroke::NONE);
+            diamond(&ui.painter(), gc, 5.5, b, Stroke::NONE);
+            diamond(&ui.painter(), gc + vec2(-1.2, -1.6), 1.6, rgba(Color32::WHITE, 0.70), Stroke::NONE);
+            tx += 20.0;
+        }
+    }
     let mid_y = head_y + 18.0 + 12.0;
-    let t_rect = text_ls(ui, th, pos2(tx, mid_y), Align2::LEFT_CENTER, o.title, Role::Display, 16.0, title_c, if th.palette == Palette::Genshin { -0.02 } else if th.palette == Palette::Pokemon { 0.0 } else { -0.01 });
+    let title = if cyber { o.title.to_uppercase() } else { o.title.to_string() };
+    let title_ls = match th.palette {
+        Palette::Genshin => -0.02,
+        Palette::Pokemon => 0.0,
+        Palette::Cyberpunk => 0.055,
+        Palette::Default => -0.01,
+    };
+    let t_rect = text_ls(ui, th, pos2(tx, mid_y), Align2::LEFT_CENTER, &title, Role::Display, if cyber { 15.5 } else { 16.0 }, title_c, title_ls);
     if !o.unit.is_empty() {
-        text(ui, th, pos2(t_rect.right() + 8.0, mid_y + 1.5), Align2::LEFT_CENTER, o.unit, Role::Sans, 11.84, th.muted);
+        let unit_role = if cyber { Role::Mono } else { Role::Sans };
+        text(ui, th, pos2(t_rect.right() + 8.0, mid_y + 1.5), Align2::LEFT_CENTER, o.unit, unit_role, 11.84, th.muted);
     }
     if let Some((s, big)) = &o.chip {
         let right = min.x + width - 1.0 - 20.0;
-        if *big {
+        if *big && gen {
+            // level-tag style: slate capsule with cream type (light), a
+            // smoked capsule with a gold rim on the dark screens
+            let (fg, bg, bd) = if th.dark {
+                (th.gold, Color32::from_black_alpha(70), rgba(th.gold, 0.70))
+            } else {
+                (crate::theme::hex(0xece5d8), crate::theme::hex(0x4a5366), rgba(th.gold, 0.0))
+            };
+            chip(ui, th, pos2(right, mid_y), Align2::RIGHT_CENTER, s, Role::MonoB, 15.0, fg, bg, Some((1.0, bd)), vec2(12.0, 3.0), pill());
+        } else if *big {
             chip(ui, th, pos2(right, mid_y), Align2::RIGHT_CENTER, s, Role::MonoB, 16.0, th.accent_dark, th.accent_soft, Some((1.0, th.accent_dark)), vec2(11.0, 2.0), pill());
         } else {
             text(ui, th, pos2(right, mid_y), Align2::RIGHT_CENTER, s, Role::MonoB, 11.84, th.muted);
@@ -600,27 +932,72 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
     let used_bottom = child.min_rect().bottom().max(body_rect.top());
     let h = (used_bottom + 20.0 + 1.0 - min.y).max(o.min_height);
     let rect = Rect::from_min_size(min, vec2(width, h));
+    crate::pikachu::perch(ui, Id::new(("pika-card", o.title, width as i32)), rect, crate::pikachu::PerchKind::Top, false);
 
     // backgrounds (set now that the height is known)
+    let cut = 9.0;
     let full = |c: Color32| Shape::rect_filled(rect, cr(r), c);
-    p.set(shadow_i, card_shadow(&p, th, rect, r));
-    p.set(bg_i, full(th.surface));
-    if let Some(hb) = o.head_bg {
-        let head_rect = Rect::from_min_size(min, vec2(width, HEAD_H));
-        p.with_clip_rect(head_rect).set(band_i, full(hb));
-    }
-    if let Some(b) = o.bar {
-        let bar_rect = Rect::from_min_size(min, vec2(4.0, h));
-        p.with_clip_rect(bar_rect).set(bar_i, full(b));
+    if cyber {
+        p.set(shadow_i, Shape::convex_polygon(chamfer_points(rect.translate(vec2(0.0, 2.0)), cut), Color32::from_black_alpha(if th.dark { 120 } else { 32 }), Stroke::NONE));
+        p.set(bg_i, Shape::convex_polygon(chamfer_points(rect, cut), if th.dark { rgba(th.surface, 0.94) } else { th.surface }, Stroke::NONE));
+        if let Some(hb) = o.head_bg {
+            p.set(band_i, cyber_band(rect, cut, HEAD_H, hb));
+        }
+        if let Some(b) = o.bar {
+            p.set(bar_i, cyber_bar(rect, cut, 4.0, b));
+        }
+    } else {
+        p.set(shadow_i, card_shadow(&p, th, rect, r));
+        p.set(bg_i, full(if gen && th.dark { rgba(th.surface, 0.94) } else { th.surface }));
+        if let Some(hb) = o.head_bg {
+            let head_rect = Rect::from_min_size(min, vec2(width, HEAD_H));
+            p.with_clip_rect(head_rect).set(band_i, full(hb));
+        } else if gen {
+            // untinted cards still get the darker dialog title band
+            let head_rect = Rect::from_min_size(min, vec2(width, HEAD_H));
+            p.with_clip_rect(head_rect).set(band_i, full(th.surface2));
+        }
+        if let (Some(b), false) = (o.bar, gen) {
+            let bar_rect = Rect::from_min_size(min, vec2(4.0, h));
+            p.with_clip_rect(bar_rect).set(bar_i, full(b));
+        }
     }
     // border + inner frame + header divider
-    let border = if th.palette == Palette::Pokemon {
-        if th.dark { rgba(th.text, 0.24) } else { Color32::from_white_alpha(235) }
-    } else {
-        th.line
+    let border = match th.palette {
+        Palette::Pokemon => {
+            if th.dark { rgba(th.text, 0.24) } else { Color32::from_white_alpha(235) }
+        }
+        Palette::Cyberpunk => rgba(th.ring, if th.dark { 0.30 } else { 0.38 }),
+        _ => th.line,
     };
     let border_w = if th.palette == Palette::Pokemon { 2.5 } else { 1.0 };
-    if o.bar.is_none() || th.palette == Palette::Pokemon {
+    if cyber {
+        cyber_stroke(&p, rect, cut, 1.0, border);
+        // A bright service rail on the left (or a yellow tab above the card's
+        // own parameter bar) plus an L-bracket at the bottom-right.
+        if o.bar.is_some() {
+            p.line_segment(
+                [pos2(rect.left() + 4.0, rect.top() + 1.0), pos2(rect.left() + 38.0, rect.top() + 1.0)],
+                Stroke::new(2.0_f32, th.accent),
+            );
+        } else {
+            p.line_segment(
+                [pos2(rect.left() + 1.0, rect.top() + 8.0), pos2(rect.left() + 1.0, rect.bottom() - 14.0)],
+                Stroke::new(2.0_f32, rgba(th.accent, 0.75)),
+            );
+        }
+        p.line_segment(
+            [pos2(rect.right() - 26.0, rect.bottom() - 1.0), pos2(rect.right() - 2.0, rect.bottom() - 1.0)],
+            Stroke::new(1.0_f32, rgba(th.ring, 0.55)),
+        );
+        p.line_segment(
+            [pos2(rect.right() - 2.0, rect.bottom() - 4.0), pos2(rect.right() - 2.0, rect.bottom() - 16.0)],
+            Stroke::new(1.0_f32, rgba(th.ring, 0.55)),
+        );
+    } else if gen {
+        stroke_in(&p, rect, r, 1.0, if th.dark { rgba(Color32::WHITE, 0.09) } else { rgba(th.gold, 0.45) });
+        genshin_frame(&p, th, rect, r);
+    } else if o.bar.is_none() || th.palette == Palette::Pokemon {
         stroke_in(&p, rect, r, border_w, border);
     } else {
         // the left edge is the coloured bar; draw the other three sides
@@ -643,6 +1020,20 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
             diamond(&p, pos2(min.x + 14.0 + 3.5, divider_y), 3.5, th.gold, Stroke::NONE);
             diamond(&p, pos2(min.x + width - 14.0 - 3.5, divider_y), 3.5, th.gold, Stroke::NONE);
         }
+        Palette::Cyberpunk => {
+            p.line_segment(
+                [pos2(min.x + bl + 8.0, divider_y), pos2(min.x + width - 18.0, divider_y)],
+                Stroke::new(1.0_f32, rgba(th.accent, 0.55)),
+            );
+            p.line_segment(
+                [pos2(min.x + bl + 8.0, divider_y), pos2(min.x + bl + 28.0, divider_y)],
+                Stroke::new(2.0_f32, th.accent),
+            );
+            p.line_segment(
+                [pos2(min.x + width - 18.0, divider_y - 3.0), pos2(min.x + width - 18.0, divider_y + 3.0)],
+                Stroke::new(1.0_f32, th.ring),
+            );
+        }
         Palette::Default => {
             p.line_segment([pos2(x0, divider_y), pos2(x1, divider_y)], Stroke::new(1.0, th.line));
         }
@@ -654,29 +1045,51 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
 pub fn summary_bar(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, status: &str, kind: crate::logic::Status) -> Rect {
     let h = 61.0;
     let rect = Rect::from_min_size(min, vec2(width, h));
+    crate::pikachu::perch(ui, ui.id().with("pika-summary"), rect, crate::pikachu::PerchKind::Top, false);
     let p = ui.painter().clone();
     let r = th.radius_lg;
     let (bg, border, fg) = match th.palette {
-        Palette::Genshin => (crate::theme::hex(0x3a4556), Color32::from_white_alpha(20), crate::theme::hex(0xe4e6dc)),
+        Palette::Genshin => (
+            if th.dark { rgba(crate::theme::hex(0x1b202c), 0.92) } else { crate::theme::hex(0x3b4255) },
+            rgba(Color32::WHITE, 0.10),
+            crate::theme::hex(0xece5d8),
+        ),
         Palette::Pokemon => (th.surface, if th.dark { rgba(th.text, 0.24) } else { Color32::from_white_alpha(235) }, th.text),
+        Palette::Cyberpunk => (th.surface, rgba(th.ring, if th.dark { 0.40 } else { 0.45 }), th.text),
         _ => (th.surface, th.line, th.text),
     };
-    p.add(card_shadow(&p, th, rect, r));
-    fill(&p, rect, r, bg);
-    stroke_in(&p, rect, r, if th.palette == Palette::Pokemon { 2.5 } else { 1.0 }, border);
+    if th.palette == Palette::Cyberpunk {
+        p.add(Shape::convex_polygon(chamfer_points(rect.translate(vec2(0.0, 2.0)), 9.0), Color32::from_black_alpha(if th.dark { 120 } else { 30 }), Stroke::NONE));
+        cyber_panel(&p, rect, 9.0, bg, 1.0, border);
+        p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, rect.height())), 0.0, th.accent);
+        p.line_segment([pos2(rect.left() + 20.0, rect.top() + 1.0), pos2(rect.left() + 92.0, rect.top() + 1.0)], Stroke::new(2.0_f32, th.accent));
+    } else {
+        p.add(card_shadow(&p, th, rect, r));
+        fill(&p, rect, r, bg);
+        stroke_in(&p, rect, r, if th.palette == Palette::Pokemon { 2.5 } else { 1.0 }, border);
+    }
     if th.palette == Palette::Genshin {
-        diamond(&p, pos2(rect.left() + 10.5, rect.center().y), 3.5, crate::theme::hex(0xcbba8c), Stroke::NONE);
+        let mut gt = *th;
+        gt.dark = true;
+        gt.gold = crate::theme::hex(0xd3bc8e);
+        genshin_frame(&p, &gt, rect, r);
+        diamond(&p, pos2(rect.left() + 13.0, rect.center().y), 4.0, gt.gold, Stroke::NONE);
     }
     if th.palette == Palette::Pokemon {
         pokeball(&p, pos2(rect.left() + 13.0, rect.center().y), 12.0, th.ink, th.accent, Color32::WHITE);
     }
-    let label_x = if th.palette == Palette::Pokemon { rect.left() + 27.0 } else { rect.left() + 20.0 };
-    text(ui, th, pos2(label_x, rect.center().y), Align2::LEFT_CENTER, "Overall status", Role::SansB, 14.72, fg);
+    let label_x = if matches!(th.palette, Palette::Pokemon | Palette::Genshin) { rect.left() + 27.0 } else { rect.left() + 20.0 };
+    if th.palette == Palette::Cyberpunk {
+        text_ls(ui, th, pos2(label_x, rect.center().y), Align2::LEFT_CENTER, "OVERALL STATUS", Role::SansB, 14.72, fg, 0.07);
+    } else {
+        text(ui, th, pos2(label_x, rect.center().y), Align2::LEFT_CENTER, "Overall status", Role::SansB, 14.72, fg);
+    }
     let (pf, pb) = match kind {
         crate::logic::Status::Ok => (th.ok, th.ok_bg),
         crate::logic::Status::Bad => (th.bad, th.bad_bg),
         crate::logic::Status::Pending => (th.neutral, th.neutral_bg),
     };
-    chip(ui, th, pos2(rect.right() - 20.0, rect.center().y), Align2::RIGHT_CENTER, status, Role::SansB, 12.48, pf, pb, None, vec2(13.0, 5.0), pill());
+    let status_text = if th.palette == Palette::Cyberpunk { status.to_uppercase() } else { status.to_string() };
+    chip(ui, th, pos2(rect.right() - 20.0, rect.center().y), Align2::RIGHT_CENTER, &status_text, Role::SansB, 12.48, pf, pb, None, vec2(13.0, 5.0), pill());
     rect
 }

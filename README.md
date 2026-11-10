@@ -10,6 +10,13 @@ Double-click **`Haematology Calculator.exe`**.
 The executable is self-contained: fonts and all assets are compiled into it, so it can be
 copied anywhere and run without the source folder.
 
+## Layout
+
+- `src/` — Rust UI, theme and calculation code
+- `assets/` — fonts, icon sources and baked backdrop textures embedded into the build
+- `examples/`, `tools/` — developer utilities (font check, reference extraction, backdrop baking)
+- `references/` — downloaded Game UI Database `.mhtml` captures (not committed; see `.gitignore`)
+
 ## Releases
 
 Releases are date-versioned (for example **9 Nov 2026**). Download the latest
@@ -34,9 +41,11 @@ See `RELEASING.md` for the commit, push and release rules used by this project.
 - **Dilution** calculator for 1:2 diluted samples (calculated neat = ×2).
 - Three palettes — **Default**, **Genshin**, **Pokémon** — each with light and dark variants.
   Genshin uses a soft, pre-blurred world backdrop (baked from the saved Game UI Database
-  reference), gold hairlines and ivory/gold pill controls. Pokémon follows the Let's Go,
+  reference), gold hairlines, ivory/gold pill controls and the game's gold-star pointer set
+  (sparkle hand, diamond resize arms, animated busy cursor). Pokémon follows the Let's Go,
   Pikachu/Eevee reference: a sunlit blurred meadow, rounded cream paper cards with milky rims,
-  teal outlines, and Pokémon-red action buttons.
+  teal outlines, and Pokémon-red action buttons. A **Cyberpunk** palette is implemented but
+  currently hidden from the selector (see below).
 - Theme and palette are remembered in `%APPDATA%\HaematologyCalculator\settings.txt`.
 
 ## Build from source
@@ -47,7 +56,7 @@ cargo build --release
 
 The resulting binary is `target\release\haematology_calculator.exe`. The embedded fonts are
 already included in the repository under `assets/fonts`; `tools/extract_fonts.py` documents how
-they were extracted from the original HTML. The fox icon is generated from `fox.jpg` into
+they were extracted from the original HTML. The fox icon is generated from `assets/icon/fox.jpg` into
 `assets/icon/fox.ico` (exe resource, via `build.rs` and the Windows resource compiler) and
 `assets/icon/fox-128.rgba` (window / taskbar icon).
 
@@ -59,7 +68,7 @@ cargo test
 
 ## Genshin design reference
 
-The Genshin theme is grounded in `Game UI Database - Genshin Impact (Console).mhtml`.
+The Genshin theme is grounded in `references/genshin/Game UI Database - Genshin Impact (Console).mhtml`.
 Extract its screenshots and contact sheets for inspection with:
 
 ```sh
@@ -72,13 +81,18 @@ Regenerate the blurred page backdrop (192×128 raw RGBA, embedded in the binary)
 python tools/make_genshin_backdrop.py
 ```
 
+The mouse set from `references/genshin/Genshin Impact mouse/` is embedded under
+`assets/cursors/genshin/`; `src/cursor.rs` materialises the `.cur`/`.ani` files into
+`%LOCALAPPDATA%\HaematologyCalculator\cursors\` and loads them as native Windows cursors
+while the Genshin palette is active.
+
 Future Genshin theme work should use the `genshin-ui` subagent in
 `.opencode/agents/genshin-ui.md`, which documents the palette, materials, blur
 treatment, ornament vocabulary and the screenshot-verification workflow.
 
 ## Pokémon design reference
 
-The Pokémon theme is grounded in the three Let's Go, Pikachu/Eevee pages under `pokemon ui/`.
+The Pokémon theme is grounded in the three Let's Go, Pikachu/Eevee pages under `references/pokemon/`.
 Extract the screenshots and contact sheets with:
 
 ```sh
@@ -94,3 +108,34 @@ python tools/make_pokemon_backdrop.py
 The reference language is: cream paper panels with thick milky rims and soft shadows;
 rounded Poppins-style type; teal outlines for selections and focus; Pokémon-red CTAs;
 pale yellow highlights; and a sunlit, out-of-focus meadow behind the UI.
+
+## Cyberpunk design reference
+
+> **Status: hidden.** The palette is fully implemented in `src/` but is omitted from the
+> sidebar while it is parked. A saved `palette=cyberpunk` setting falls back to Default.
+
+The Cyberpunk theme is grounded in the two Cyberpunk 2077 pages under
+`references/cyberpunk/`. Extract the screenshots and contact sheets with:
+
+```sh
+python tools/cyberpunk_reference.py
+```
+
+Useful screens are the breach-protocol terminal (`ui` 040), the inventory and crafting
+screens (`ui` 095–123), and the neon corridor/street shots (`ui` 030–035). The visual
+language is: near-black blue panels, acid-yellow service accents, cyan data lines,
+red/magenta alerts, clipped panel corners, uppercase condensed type (Rajdhani) and
+monospace read-outs (Share Tech Mono). Panels are hard-edged datapads rather than
+paper or lacquer surfaces.
+
+Regenerate the blurred neon corridor backdrop (192×108 raw RGBA, embedded in the
+binary) with:
+
+```sh
+python tools/make_cyberpunk_backdrop.py
+```
+
+The palette can still be rendered for verification through the screenshot harness
+(`HAEM_SCENE="palette=cyberpunk,dark=1"`). To re-enable it in the app, add the
+`(Palette::Cyberpunk, "Cyberpunk")` row back to the palette list in `App::sidebar` and
+restore the fourth row in its height calculation.

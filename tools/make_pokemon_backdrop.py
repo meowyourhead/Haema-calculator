@@ -22,7 +22,7 @@ import re
 from PIL import Image, ImageEnhance, ImageFilter
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-MHTML = sorted((ROOT / "pokemon ui").glob("*.mhtml"))[0]
+MHTML = sorted((ROOT / "references" / "pokemon").glob("*.mhtml"))[0]
 OUT = ROOT / "assets" / "pokemon-backdrop.rgba"
 PREVIEW = ROOT / "shots" / "pokemon-backdrop-preview.png"
 

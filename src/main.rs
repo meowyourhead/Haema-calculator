@@ -2,9 +2,11 @@
 
 mod app;
 mod chrome;
+mod cursor;
 mod fonts;
 mod logic;
 mod panels;
+mod pikachu;
 mod reference;
 mod theme;
 mod ui;

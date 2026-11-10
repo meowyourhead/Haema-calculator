@@ -11,7 +11,7 @@ the saved reference to keep it coherent as the app grows.
 
 ## Source of truth
 
-The design reference is `Game UI Database - Genshin Impact (Console).mhtml`
+The design reference is `references/genshin/Game UI Database - Genshin Impact (Console).mhtml`
 (10 MB, base64 images). **Never read the MHTML directly** — it will flood the
 context. Extract and inspect it instead:
 
@@ -43,9 +43,11 @@ blur keeps the scene present without competing with the UI. The page backdrop is
 a tiny (192×128) pre-blurred raw RGBA texture baked from the reference. Do not
 replace it with a sharp screenshot or a CSS-style flat gradient.
 
-**Palette.** Deep slate/navy (`#252f3f`, `#3b475c`, `#333f52`), warm ivory and
-parchment (`#f1e7dd`, `#efe9de`, `#e4ddd0`), muted antique gold (`#cbba8c`,
-`#b8975a`), pale sky blue for focus (`#5a82cc` / `#8fb0ee`), and status colours
+**Palette.** The in-game dialog cream `#ece5d8`, slate ink `#495366`/`#3f4759`,
+slate buttons and frames `#4a5366`/`#3b4255`, midnight slate panels
+(`#2e3546`, `#262c3b`, `#1d2230`), champagne gold `#d3bc8e` (deepened to
+`#bf9f63` on cream), element hues for the four counts (Pyro, Electro, Geo,
+Hydro), pale sky blue for focus (`#5a82cc` / `#8fb0ee`), and status colours
 that stay muted and natural. The light palette is parchment, not white; the dark
 palette is blue-slate, not neutral grey.
 
@@ -58,25 +60,45 @@ large flat gold fill except for the active pill. Shadows are soft and short.
 the corners, and small diamond terminals. They encode hierarchy: a rule under a
 card header, a diamond on the page rail. Do not scatter them as decoration.
 
-**Buttons.** Pill silhouettes. Inactive buttons are warm cream with dark slate
-labels; the active/primary choice is deeper gold or saturated cream. Secondary
-and mini actions are outlined, not filled. Hover adds a gold rim and a soft outer
-glow; press drops the button 1 px onto its shadow. Labels are sentence case and
-must stay high contrast on both the cream and navy variants.
+**Buttons.** In-game dialog pills: every action uses the same pill and a
+leading controller-prompt disc says what it does (gold disc = confirm, gold
+disc with +/− = add/remove, pale-blue ✕ disc = cancel/clear/reset). Slate
+plate (`#4a5366`) with cream type in light mode, cream plate (`#ece5d8`) with
+slate type in dark mode. Hover is a soft white halo; press drops 1 px.
+Soft/mini actions are outlined in gold.
+
+**Cards.** Framed dialogs: parchment `#ece5d8` (light) or translucent slate
+(dark), an inset champagne hairline 4 px inside the edge, and gold L-shaped
+corner brackets with diamond terminals just outside each corner
+(`ui::genshin_frame`). The parameter colour is an element gem beside the
+title, not a left bar. The ≤ limit is a slate level-tag capsule.
+
+**Fields.** The "Edit Nickname" capsule: ivory pill on parchment, cream pill
+on slate, slate ink in both; focus is a gold rim + halo.
+
+**Rows.** Settings / Key Bindings rows: a soft bar for the label and a
+brighter value cell on the right whose left edge feathers in behind a faint
+sparkle. Use solid (mixed) colours, not alpha fills, for row surfaces: alpha
+fills inside cards rendered far brighter than their nominal alpha.
+
+**Chrome.** The notice-board header: dark slate strip in both modes, text
+tabs (no tab shapes), the active one cream with a short gold underline,
+centre diamond and faint glow; a gold hairline that fades toward both edges.
+
+**Rail.** Dark slate dialog with the gold corner brackets; the palette list
+is plain cream text, the selection a cream bar that feathers out right.
+
+**Cursor.** Use the game's mouse set, not a recoloured system pointer. The idle
+pointer is a gold four-point star with a soft ivory trail; links and other
+clickable rows get the sparkle hand (`Link select`), the window edges get the
+diamond resize arms, and `Crosshair` gets the star + map pin. The busy cursors
+are the game's animated spinners. Cursors are native Windows handles so the
+hotspot, DPI scaling and `.ani` timing are correct; never redraw them as UI
+shapes and never invent a pointer that is not in the set.
 
 **Type.** HYWenHei (bundled subset, 0.86 scale) across the theme, including body
 notes. It is round, slightly condensed and low-contrast; sizes are generous
 because the face runs small. Do not introduce a second display face for Genshin.
-
-**Chrome.** The title strip is a darker parchment in light mode and slate in dark
-mode, separated by a gold hairline. The active tab opens into the page with a
-rounded top and a short gold top rule. Tabs are not pills.
-
-**Rows and cards.** FBC cards keep their coloured left bar and tinted header.
-Result rows become ivory pills in light mode (with faint stars and a gold value
-segment) and translucent slate bars in dark mode. Checker fields are inset navy
-in dark mode and warm parchment in light mode; focus is a gold rim.
-
 ## Code map
 
 - `src/theme.rs` — palette tokens (`Theme::new`), radii, fonts, `faux_bold`.
@@ -86,9 +108,13 @@ in dark mode and warm parchment in light mode; focus is a gold rim.
 - `src/ui.rs` — buttons, fields, cards, chips, notes, ornaments, the backdrop
   texture loader.
 - `src/chrome.rs` — title strip, tabs, window captions.
+- `src/cursor.rs` — native Windows cursor override (loaded from
+  `assets/cursors/genshin/`, applied only while the Genshin palette is active).
 - `src/panels.rs` — checker toolbar, Genshin result-row overlay, retic/dilution
   layouts.
 - `assets/genshin-backdrop.rgba` — baked 192×128 RGBA blur (do not hand-edit).
+- `assets/cursors/genshin/` — the `.cur`/`.ani` mouse set copied from
+  `references/genshin/Genshin Impact mouse/`, embedded with `include_bytes!`.
 - `tools/make_genshin_backdrop.py` — regenerates the backdrop from the MHTML.
 - `tools/genshin_reference.py` — extracts reference screenshots and sheets.
 

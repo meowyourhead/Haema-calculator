@@ -52,7 +52,10 @@ fn draw_table(ui: &mut Ui, th: &Theme, o: Pos2, tw: f32, note_row: f32) {
     let accent_bar = if th.palette == Palette::Genshin { th.gold } else { th.accent };
     let param_cell = |ui: &Ui, top: f32, h: f32, name: &str| {
         let r = Rect::from_min_max(pos2(xs[0], top), pos2(xs[1], top + h));
-        let cell_bg = if th.palette == Palette::Pokemon { th.surface2 } else { th.accent_soft };
+        let cell_bg = match th.palette {
+            Palette::Pokemon | Palette::Cyberpunk => th.surface2,
+            _ => th.accent_soft,
+        };
         p.rect_filled(r, 0.0, cell_bg);
         p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, h)), 0.0, accent_bar);
         let g = galley(ui, th, name, Role::SansB, 13.76, th.text, 0.0, r.width() - 12.0 - 15.0);

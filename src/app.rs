@@ -3,7 +3,7 @@ use crate::logic::Gender;
 use crate::theme::{hex, rgba, Palette, Role, Theme};
 use crate::ui::*;
 use eframe::egui::{
-    self, epaint::StrokeKind, pos2, vec2, Align2, Color32, Id, Rect, Sense, Stroke, Ui,
+    self, pos2, vec2, Align2, Color32, Id, Rect, Sense, Stroke, Ui,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -76,7 +76,9 @@ pub struct App {
     pub dil: [String; 5],
     genshin_backdrop: egui::TextureHandle,
     pokemon_backdrop: egui::TextureHandle,
+    cyberpunk_backdrop: egui::TextureHandle,
     styled: Option<(Palette, bool)>,
+    pika: crate::pikachu::Pikachu,
     #[cfg(feature = "screenshot")]
     shot: crate::app::Shot,
 }
@@ -87,6 +89,11 @@ pub struct Shot {
     path: Option<String>,
     frame: u32,
     scroll: f32,
+    /// Frame on which to capture (HAEM_FRAMES, default 8).
+    at: u32,
+    pika_sheet: bool,
+    /// Simulated right-click, sent once Pikachu has landed (HAEM_SCENE=goal=X:Y).
+    goal: Option<egui::Pos2>,
 }
 
 impl App {
@@ -109,7 +116,9 @@ impl App {
             dil: Default::default(),
             genshin_backdrop: genshin_backdrop_texture(&cc.egui_ctx),
             pokemon_backdrop: pokemon_backdrop_texture(&cc.egui_ctx),
+            cyberpunk_backdrop: cyberpunk_backdrop_texture(&cc.egui_ctx),
             styled: None,
+            pika: crate::pikachu::Pikachu::new(),
             #[cfg(feature = "screenshot")]
             shot: Default::default(),
         };
@@ -162,6 +171,7 @@ impl App {
         match p {
             Palette::Genshin => self.dark = true,
             Palette::Pokemon => self.dark = false,
+            Palette::Cyberpunk => self.dark = true,
             Palette::Default => {}
         }
         save_settings(self.dark, self.palette);
@@ -196,6 +206,10 @@ fn load_settings() -> (bool, Palette) {
             }
         }
     }
+    // Cyberpunk is hidden for now: a previously saved choice falls back to Default.
+    if palette == Palette::Cyberpunk {
+        palette = Palette::Default;
+    }
     (dark, palette)
 }
 
@@ -213,19 +227,22 @@ fn save_settings(dark: bool, palette: Palette) {
 // ---------------------------------------------------------------------------
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        crate::cursor::install(frame);
+
         let th = self.theme();
         self.apply_style(ctx, &th);
 
         // Field navigation state: rebuilt every frame from the fields actually drawn.
         ctx.data_mut(|d| d.insert_temp(Id::new("haem-field-order"), Vec::<(Id, Rect)>::new()));
+        crate::pikachu::begin_frame(ctx);
         let focus_before = ctx.memory(|m| m.focused());
 
         crate::chrome::title_bar(self, ctx);
 
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(th.bg)).show(ctx, |ui| {
             let screen = ui.max_rect();
-            paint_page_background(ui, &th, screen, &self.genshin_backdrop, &self.pokemon_backdrop);
+            paint_page_background(ui, &th, screen, &self.genshin_backdrop, &self.pokemon_backdrop, &self.cyberpunk_backdrop);
 
             let app_w = (screen.width() - 48.0).min(1440.0).max(480.0);
             let left = screen.left() + ((screen.width() - app_w) / 2.0).max(24.0);
@@ -254,15 +271,47 @@ impl eframe::App for App {
             });
 
             self.sidebar(ui, &th, pos2(left, screen.top() + 36.0));
+            crate::pikachu::perch(ui, Id::new("pika-floor"), screen, crate::pikachu::PerchKind::Floor, false);
             crate::chrome::resize_frame(ui);
         });
+
+        // Pokémon mascot: roams the perches registered above.
+        self.pika.tick(ctx, &th, self.palette == Palette::Pokemon);
+        #[cfg(feature = "screenshot")]
+        {
+            if self.shot.pika_sheet {
+                crate::pikachu::debug_sheet(ctx);
+            }
+            if self.shot.frame == 90 {
+                if let Some(g) = self.shot.goal {
+                    self.pika.debug_goal(g);
+                }
+            }
+        }
+
+        // Hand this frame's requested cursor to the palette's themed pointer set
+        // (or back to the stock cursor when the palette has none).
+        let icon = ctx.output(|o| o.cursor_icon);
+        let set = match self.palette {
+            Palette::Genshin => Some(crate::cursor::Set::Genshin),
+            Palette::Pokemon => Some(crate::cursor::Set::Pokemon),
+            _ => None,
+        };
+        crate::cursor::apply(ctx, set, icon);
 
         #[cfg(feature = "screenshot")]
         self.screenshot_tick(ctx);
     }
 }
 
-fn paint_page_background(ui: &Ui, th: &Theme, screen: Rect, genshin: &egui::TextureHandle, pokemon: &egui::TextureHandle) {
+fn paint_page_background(
+    ui: &Ui,
+    th: &Theme,
+    screen: Rect,
+    genshin: &egui::TextureHandle,
+    pokemon: &egui::TextureHandle,
+    cyberpunk: &egui::TextureHandle,
+) {
     let p = ui.painter();
     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     match th.palette {
@@ -292,6 +341,30 @@ fn paint_page_background(ui: &Ui, th: &Theme, screen: Rect, genshin: &egui::Text
             radial(p, mint, 560.0, 320.0, rgba(hex(0x9bdc7a), if th.dark { 0.06 } else { 0.22 }));
             let sky = pos2(screen.left() + screen.width() * 0.18, screen.top() + screen.height() * 0.16);
             radial(p, sky, 520.0, 300.0, rgba(hex(0x8ed8ef), if th.dark { 0.05 } else { 0.12 }));
+        }
+        Palette::Cyberpunk => {
+            // A rain-slicked Night City corridor under a smoked datapad veil,
+            // with the HUD's cyan, magenta and red light bleeding through.
+            p.add(egui::Shape::image(cyberpunk.id(), screen, uv, Color32::WHITE));
+            p.rect_filled(screen, 0.0, if th.dark { rgba(th.bg, 0.62) } else { rgba(hex(0xe6ebee), 0.86) });
+
+            let cyan = pos2(screen.left() + screen.width() * 0.86, screen.top() + screen.height() * 0.06);
+            radial(p, cyan, 760.0, 420.0, rgba(hex(0x35e8ff), if th.dark { 0.14 } else { 0.05 }));
+            let magenta = pos2(screen.left() + screen.width() * 0.72, screen.bottom() + 40.0);
+            radial(p, magenta, 720.0, 390.0, rgba(hex(0xff2f92), if th.dark { 0.10 } else { 0.03 }));
+            let red = pos2(screen.left() + screen.width() * 0.08, screen.top() + screen.height() * 0.24);
+            radial(p, red, 560.0, 330.0, rgba(hex(0xff1133), if th.dark { 0.08 } else { 0.025 }));
+            let lens = pos2(screen.left() + screen.width() * 0.30, screen.bottom() - 30.0);
+            radial(p, lens, 520.0, 300.0, rgba(hex(0xfcee0a), if th.dark { 0.032 } else { 0.02 }));
+
+            // Faint horizontal scanlines keep the scene reading as a terminal.
+            let step = if th.dark { 4.0 } else { 5.0 };
+            let line = Stroke::new(1.0_f32, if th.dark { Color32::from_black_alpha(26) } else { Color32::from_black_alpha(16) });
+            let mut y = screen.top();
+            while y < screen.bottom() {
+                p.line_segment([pos2(screen.left(), y), pos2(screen.right(), y)], line);
+                y += step;
+            }
         }
         Palette::Default => {}
     }
@@ -343,6 +416,7 @@ impl App {
         let w = 88.0; // compact content width
         let toggle_h = 20.0;
         let gap = 3.5;
+        // Cyberpunk is implemented but hidden for now; only three palette rows.
         let total_h = toggle_h + 3.0 * (gap + toggle_h);
         let sb = Rect::from_min_size(origin, vec2(w + 20.0, total_h));
         let p = ui.painter().clone();
@@ -350,9 +424,15 @@ impl App {
         match th.palette {
             Palette::Genshin => {
                 let r = Rect::from_min_max(pos2(sb.left() - 10.0, sb.top() - 14.0), pos2(sb.right() - 10.0, sb.bottom() + 14.0));
+                // Settings-menu rail: a dark slate dialog with the gold corner
+                // brackets, holding a text list whose selection is a cream bar.
                 p.add(card_shadow(&p, th, r, th.radius_lg));
-                fill(&p, r, th.radius_lg, hex(0x3a4556));
-                stroke_in(&p, r, th.radius_lg, 1.0, Color32::from_white_alpha(20));
+                fill(&p, r, th.radius_lg, if th.dark { rgba(hex(0x1b202c), 0.92) } else { hex(0x3b4255) });
+                stroke_in(&p, r, th.radius_lg, 1.0, rgba(Color32::WHITE, 0.10));
+                let mut gt = *th;
+                gt.dark = true;
+                gt.gold = hex(0xd3bc8e);
+                crate::ui::genshin_frame(&p, &gt, r, th.radius_lg);
             }
             Palette::Pokemon => {
                 // A milky rounded menu card, like the Let's Go bag/party panels.
@@ -360,7 +440,18 @@ impl App {
                 p.add(card_shadow(&p, th, r, th.radius_lg));
                 fill(&p, r, th.radius_lg, th.surface);
                 stroke_in(&p, r, th.radius_lg, 2.5, if th.dark { rgba(th.text, 0.20) } else { Color32::from_white_alpha(220) });
+                crate::pikachu::perch(ui, Id::new("pika-sidebar"), r, crate::pikachu::PerchKind::Top, false);
                 stroke_in(&p, r.shrink(2.5), th.radius_lg - 2.5, 1.0, rgba(th.ring, 0.35));
+            }
+            Palette::Cyberpunk => {
+                // A hard-edged NCPD datapad rail with a cyan rim and a yellow
+                // service tab on the left edge.
+                let r = Rect::from_min_max(pos2(sb.left() - 10.0, sb.top() - 14.0), pos2(sb.right() - 10.0, sb.bottom() + 14.0));
+                fill(&p, r.translate(vec2(0.0, 2.0)), th.radius_lg, rgba(th.bg, 0.55));
+                fill(&p, r, th.radius_lg, rgba(th.surface, 0.94));
+                stroke_in(&p, r, th.radius_lg, 1.0, rgba(th.ring, 0.55));
+                p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, th.accent);
+                p.line_segment([pos2(r.left() + 9.0, r.top() + 1.0), pos2(r.right() - 9.0, r.top() + 1.0)], Stroke::new(1.0_f32, rgba(th.accent, 0.65)));
             }
             Palette::Default => {
                 p.line_segment([pos2(sb.right() - 0.5, sb.top()), pos2(sb.right() - 0.5, sb.bottom())], Stroke::new(1.0, th.line));
@@ -373,7 +464,7 @@ impl App {
         let rect = Rect::from_min_size(pos2(origin.x, y), vec2(w, toggle_h));
         let resp = side_toggle(ui, th, rect, Id::new("dark-toggle"), false);
         let icon_c = pos2(rect.left() + 10.0, rect.center().y);
-        let fgc = if th.palette == Palette::Genshin { hex(0x2f3a4c) } else { th.text };
+        let fgc = if th.palette == Palette::Genshin { hex(0xece5d8) } else { th.text };
         if th.dark {
             moon_icon(&p, icon_c, fgc);
         } else {
@@ -383,8 +474,8 @@ impl App {
         let sw = Rect::from_min_size(pos2(rect.right() - 8.0 - 22.0, rect.center().y - 6.0), vec2(22.0, 12.0));
         let on = ui.ctx().animate_bool_with_time(Id::new("dark-anim"), th.dark, 0.2);
         let track = match (th.palette, th.dark) {
-            (Palette::Genshin, true) => hex(0x6993d7),
-            (Palette::Genshin, false) => hex(0xb3ab9a),
+            (Palette::Genshin, true) => hex(0xd3bc8e),
+            (Palette::Genshin, false) => hex(0x646d84),
             (_, true) => th.accent,
             _ => th.line_strong,
         };
@@ -402,7 +493,15 @@ impl App {
         y += toggle_h;
 
         // --- palettes
-        for (i, (pal, name)) in [(Palette::Default, "Default"), (Palette::Genshin, "Genshin"), (Palette::Pokemon, "Pokémon")].iter().enumerate() {
+        // Cyberpunk is intentionally omitted while the theme is parked.
+        for (i, (pal, name)) in [
+            (Palette::Default, "Default"),
+            (Palette::Genshin, "Genshin"),
+            (Palette::Pokemon, "Pokémon"),
+        ]
+        .iter()
+        .enumerate()
+        {
             y += gap;
             let rect = Rect::from_min_size(pos2(origin.x, y), vec2(w, toggle_h));
             let active = self.palette == *pal;
@@ -410,13 +509,19 @@ impl App {
             let sc = pos2(rect.left() + 10.0, rect.center().y);
             let (fg, sw_fill, sw_border) = if th.palette == Palette::Genshin {
                 if active {
-                    (hex(0x232c3a), hex(0x232c3a), hex(0x232c3a))
+                    (hex(0x3b4255), hex(0x3b4255), hex(0x3b4255))
                 } else {
-                    (hex(0x2f3a4c), Color32::TRANSPARENT, hex(0x6f6553))
+                    (rgba(hex(0xece5d8), 0.80), Color32::TRANSPARENT, hex(0xd3bc8e))
                 }
             } else if th.palette == Palette::Pokemon {
                 if active {
                     (th.text, th.ring, th.ring)
+                } else {
+                    (th.text, Color32::TRANSPARENT, th.line_strong)
+                }
+            } else if th.palette == Palette::Cyberpunk {
+                if active {
+                    (th.text, th.accent, th.accent)
                 } else {
                     (th.text, Color32::TRANSPARENT, th.line_strong)
                 }
@@ -436,6 +541,16 @@ impl App {
                 }
                 Palette::Pokemon => {
                     pokeball(&p, sc, 8.0, th.ink, th.accent, Color32::WHITE);
+                }
+                Palette::Cyberpunk => {
+                    cyber_chip(
+                        &p,
+                        sc,
+                        9.0,
+                        if active { th.accent } else { Color32::TRANSPARENT },
+                        sw_border,
+                        if active { th.on_accent } else { th.ring },
+                    );
                 }
             }
             text(ui, th, pos2(sc.x + 5.0 + 5.0, rect.center().y), Align2::LEFT_CENTER, name, Role::Sans, 12.0, fg);
@@ -469,21 +584,19 @@ fn side_toggle(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, active: bool) -> egu
             stroke_in(&p, rect, r, 1.0, border);
         }
         Palette::Genshin => {
-            // Cream pills with a warm rim: the selected state gets a darker
-            // ink and border so it reads clearly against the navy rail.
-            let (bg, border) = if active {
-                (hex(0xcbba8c), hex(0x8f7440))
-            } else {
-                (hex(0xf7f0e6), if hovered { hex(0xcbba8c) } else { hex(0xb9ad98) })
-            };
-            if !pressed {
-                p.rect_filled(rect.translate(vec2(0.0, 2.0)), cr(pill()), Color32::from_black_alpha(56));
+            // Settings list rows: plain text on the slate rail; the selected
+            // entry is a cream bar that feathers out to the right, hover is a
+            // faint white wash.
+            let r = 3.0;
+            let wide = Rect::from_min_max(rect.min - vec2(4.0, 0.0), rect.max - vec2(2.0, 0.0));
+            if active {
+                let cream = hex(0xece5d8);
+                let solid = Rect::from_min_max(wide.min, pos2(wide.right() - 22.0, wide.bottom()));
+                fill(&p, solid, r, cream);
+                crate::ui::h_gradient(&p, Rect::from_min_max(pos2(solid.right() - 1.0, wide.top()), wide.max), cream, rgba(cream, 0.0));
+            } else if hovered {
+                fill(&p, wide, r, rgba(Color32::WHITE, 0.08));
             }
-            if hovered {
-                p.rect_stroke(rect.expand(1.5), cr(pill()), Stroke::new(3.0, rgba(hex(0xcbba8c), 0.55)), StrokeKind::Middle);
-            }
-            fill(&p, rect, pill(), bg);
-            stroke_in(&p, rect, pill(), 1.0, border);
         }
         Palette::Pokemon => {
             let r = 14.0;
@@ -501,6 +614,20 @@ fn side_toggle(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, active: bool) -> egu
                 stroke_in(&p, rect.shrink(2.0), r - 2.0, 1.0, if th.dark { rgba(Color32::WHITE, 0.10) } else { Color32::from_white_alpha(180) });
             }
         }
+        Palette::Cyberpunk => {
+            let (bg, border) = if active {
+                (th.accent_soft, th.accent)
+            } else if hovered {
+                (rgba(th.ring, 0.10), rgba(th.ring, 0.65))
+            } else {
+                (Color32::TRANSPARENT, rgba(th.line, 0.75))
+            };
+            fill(&p, rect, r, bg);
+            stroke_in(&p, rect, r, 1.0, border);
+            if active {
+                p.rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), 0.0, th.accent);
+            }
+        }
     }
     resp
 }
@@ -513,6 +640,7 @@ fn side_toggle(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, active: bool) -> egu
 impl App {
     fn apply_scene(&mut self) {
         self.shot.path = std::env::var("HAEM_SHOT").ok();
+        self.shot.at = std::env::var("HAEM_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
         let scene = std::env::var("HAEM_SCENE").unwrap_or_default();
         let mut fill_data = false;
         for kv in scene.split(',') {
@@ -536,6 +664,13 @@ impl App {
                     self.pt.third = v == "1";
                 }
                 "scroll" => self.shot.scroll = v.parse().unwrap_or(0.0),
+                "pika" => self.shot.pika_sheet = v == "sheet",
+                "goal" => {
+                    let xy: Vec<f32> = v.split(':').filter_map(|n| n.parse().ok()).collect();
+                    if xy.len() == 2 {
+                        self.shot.goal = Some(pos2(xy[0], xy[1]));
+                    }
+                }
                 _ => {}
             }
         }
@@ -563,7 +698,7 @@ impl App {
         let Some(path) = self.shot.path.clone() else { return };
         self.shot.frame += 1;
         ctx.request_repaint();
-        if self.shot.frame == 8 {
+        if self.shot.frame == self.shot.at {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
         let img = ctx.input(|i| {

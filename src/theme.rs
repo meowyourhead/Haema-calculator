@@ -21,6 +21,7 @@ pub enum Palette {
     Default,
     Genshin,
     Pokemon,
+    Cyberpunk,
 }
 
 impl Palette {
@@ -29,12 +30,14 @@ impl Palette {
             Palette::Default => "default",
             Palette::Genshin => "genshin",
             Palette::Pokemon => "pokemon",
+            Palette::Cyberpunk => "cyberpunk",
         }
     }
     pub fn from_key(s: &str) -> Palette {
         match s {
             "genshin" => Palette::Genshin,
             "pokemon" => Palette::Pokemon,
+            "cyberpunk" => Palette::Cyberpunk,
             _ => Palette::Default,
         }
     }
@@ -98,20 +101,23 @@ impl Theme {
         match (palette, dark) {
             (Palette::Default, _) => {}
             (Palette::Genshin, false) => {
-                t.bg = hex(0xdcd8cb);
-                t.surface = hex(0xefe9de);
-                t.surface2 = hex(0xe4ddd0);
-                t.secondary = hex(0xd3cbbb);
-                t.text = hex(0x3b475c);
-                t.muted = hex(0x566075);
-                t.line = hex(0xcfc7b6);
-                t.line_strong = hex(0xa59d89);
-                t.accent = hex(0x454f68);
-                t.accent_dark = hex(0x3b475c);
-                t.accent_soft = mix(0.42, hex(0xcbba8c), hex(0xefe9de));
-                t.on_accent = hex(0xf1e7dd);
+                // Paimon-menu parchment: the in-game dialog cream (#ece5d8),
+                // slate ink (#495366), dark slate buttons (#4a5366) and a
+                // champagne-gold hairline (#d3bc8e, deepened for cream).
+                t.bg = hex(0xdcd4c4);
+                t.surface = hex(0xece5d8);
+                t.surface2 = hex(0xe3dccd);
+                t.secondary = hex(0xd8cfbd);
+                t.text = hex(0x3f4759);
+                t.muted = hex(0x5f6677);
+                t.line = hex(0xd6ccb8);
+                t.line_strong = hex(0xb3a688);
+                t.accent = hex(0x4a5366);
+                t.accent_dark = hex(0x3b4255);
+                t.accent_soft = mix(0.30, hex(0xd3bc8e), hex(0xece5d8));
+                t.on_accent = hex(0xece5d8);
                 t.ring = hex(0x5a82cc);
-                t.gold = hex(0xb8975a);
+                t.gold = hex(0xbf9f63);
                 t.ok = hex(0x256b4a);
                 t.ok_bg = hex(0xd9e6d8);
                 t.bad = hex(0xa63530);
@@ -120,30 +126,28 @@ impl Theme {
                 t.warn_bg = hex(0xeadcb6);
                 t.neutral = hex(0x566075);
                 t.neutral_bg = hex(0xe4ddd0);
-                t.param = [
-                    (hex(0xa8481e), hex(0xf1ddcb)),
-                    (hex(0x7a45b0), hex(0xe6dcec)),
-                    (hex(0x7a560a), hex(0xeee0b8)),
-                    (hex(0x185d83), hex(0xd5e3e6)),
-                ];
+                let pf = [hex(0xa9481f), hex(0x7a45b0), hex(0x7a560a), hex(0x185d83)];
+                t.param = pf.map(|c| (c, mix(0.10, c, hex(0xe3dccd))));
                 t.radius = 4.0;
                 t.radius_lg = 6.0;
             }
             (Palette::Genshin, true) => {
-                t.bg = hex(0x252f3f);
-                t.surface = hex(0x3b475c);
-                t.surface2 = hex(0x333f52);
-                t.secondary = hex(0x47566a);
-                t.text = hex(0xe4e6dc);
-                t.muted = hex(0xc4c3ba);
-                t.line = hex(0x4f5d73);
-                t.line_strong = hex(0x6a798d);
-                t.accent = hex(0xf1e7dd);
-                t.accent_dark = hex(0xcbba8c);
-                t.accent_soft = mix(0.18, hex(0xcbba8c), hex(0x3b475c));
-                t.on_accent = hex(0x454f68);
+                // Character / inventory screens: translucent midnight slate
+                // (#2b3142 .. #3b4255) with cream type and champagne gold.
+                t.bg = hex(0x1d2230);
+                t.surface = hex(0x2e3546);
+                t.surface2 = hex(0x262c3b);
+                t.secondary = hex(0x3b4255);
+                t.text = hex(0xece5d8);
+                t.muted = hex(0xbdb6a8);
+                t.line = hex(0x454d61);
+                t.line_strong = hex(0x646d84);
+                t.accent = hex(0xece5d8);
+                t.accent_dark = hex(0xd3bc8e);
+                t.accent_soft = mix(0.20, hex(0xd3bc8e), hex(0x2e3546));
+                t.on_accent = hex(0x3b4255);
                 t.ring = hex(0x8fb0ee);
-                t.gold = hex(0xcbba8c);
+                t.gold = hex(0xd3bc8e);
                 t.ok = hex(0x8fd3a8);
                 t.ok_bg = hex(0x2f4d4a);
                 t.bad = hex(0xffa398);
@@ -152,12 +156,10 @@ impl Theme {
                 t.warn_bg = hex(0x4b4637);
                 t.neutral = hex(0xc4c3ba);
                 t.neutral_bg = hex(0x434e63);
-                t.param = [
-                    (hex(0xf5a47a), hex(0x4b4450)),
-                    (hex(0xc9a6f2), hex(0x444568)),
-                    (hex(0xebc66b), hex(0x4c4e55)),
-                    (hex(0x7fcbef), hex(0x35506a)),
-                ];
+                // Element hues (Pyro, Electro, Geo, Hydro) for the four counts;
+                // header tints are a faint wash over the slate panel.
+                let pf = [hex(0xf39a77), hex(0xc9a3f0), hex(0xeec870), hex(0x7fcdf0)];
+                t.param = pf.map(|c| (c, mix(0.13, c, hex(0x262c3b))));
                 t.radius = 4.0;
                 t.radius_lg = 6.0;
             }
@@ -237,6 +239,84 @@ impl Theme {
                 t.field = hex(0x13262c);
                 t.radius = 16.0;
                 t.radius_lg = 22.0;
+            }
+            (Palette::Cyberpunk, false) => {
+                // Corpo daylight: brushed alloy, white datapads and Arasaka red.
+                // Still sharp-cornered and technical, never friendly paper.
+                t.bg = hex(0xe9edf0);
+                t.surface = hex(0xf8fafb);
+                t.surface2 = hex(0xdde4e9);
+                t.secondary = hex(0xd1dae0);
+                t.text = hex(0x0b1620);
+                t.muted = hex(0x4f6574);
+                t.line = hex(0xb9c7d0);
+                t.line_strong = hex(0x8399a8);
+                t.accent = hex(0xd81e3f);
+                t.accent_dark = hex(0xb0132f);
+                t.accent_soft = hex(0xf7dbe1);
+                t.on_accent = hex(0xffffff);
+                t.ring = hex(0x007c96);
+                t.ok = hex(0x0b7a4f);
+                t.ok_bg = hex(0xd7efe4);
+                t.bad = hex(0xc01238);
+                t.bad_bg = hex(0xf8d9e0);
+                t.warn = hex(0x8a5a00);
+                t.warn_bg = hex(0xf6e7c6);
+                t.neutral = hex(0x5f7484);
+                t.neutral_bg = hex(0xdde4e9);
+                t.param = [
+                    (hex(0xb0132f), hex(0xf7dbe1)),
+                    (hex(0x006e88), hex(0xd6edf2)),
+                    (hex(0x7a6b00), hex(0xf3efc7)),
+                    (hex(0x9a1d7c), hex(0xf4d9ee)),
+                ];
+                t.gold = hex(0xc9a600);
+                t.ink = hex(0x0b1620);
+                t.frame = hex(0x007c96);
+                t.hard = rgba(Color32::BLACK, 0.18);
+                t.check = Color32::TRANSPARENT;
+                t.field = hex(0xf3f6f8);
+                t.radius = 2.0;
+                t.radius_lg = 3.0;
+            }
+            (Palette::Cyberpunk, true) => {
+                // Night City terminal: near-black blue, acid yellow, cyan data,
+                // magenta and red alerts. Panels are hard-edged datapads.
+                t.bg = hex(0x070a11);
+                t.surface = hex(0x0c131d);
+                t.surface2 = hex(0x0a1018);
+                t.secondary = hex(0x16202c);
+                t.text = hex(0xe6f4ff);
+                t.muted = hex(0x7c93a6);
+                t.line = hex(0x1c3040);
+                t.line_strong = hex(0x36586e);
+                t.accent = hex(0xfcee0a);
+                t.accent_dark = hex(0xffe94a);
+                t.accent_soft = mix(0.16, hex(0xfcee0a), hex(0x0c131d));
+                t.on_accent = hex(0x0a0b05);
+                t.ring = hex(0x35e8ff);
+                t.ok = hex(0x46ff9c);
+                t.ok_bg = hex(0x06301f);
+                t.bad = hex(0xff3b63);
+                t.bad_bg = hex(0x360812);
+                t.warn = hex(0xffb454);
+                t.warn_bg = hex(0x33200a);
+                t.neutral = hex(0x8aa3b5);
+                t.neutral_bg = hex(0x152330);
+                t.param = [
+                    (hex(0xff5c7a), hex(0x3a0f1a)),
+                    (hex(0x48e6ff), hex(0x082b36)),
+                    (hex(0xfcee0a), hex(0x302b08)),
+                    (hex(0xff6ada), hex(0x340b2b)),
+                ];
+                t.gold = hex(0xfcee0a);
+                t.ink = hex(0xe6f4ff);
+                t.frame = hex(0x35e8ff);
+                t.hard = rgba(Color32::BLACK, 0.45);
+                t.check = Color32::TRANSPARENT;
+                t.field = hex(0x060b12);
+                t.radius = 2.0;
+                t.radius_lg = 3.0;
             }
         }
         t
@@ -331,6 +411,12 @@ impl Theme {
                 Role::SansB | Role::Display | Role::MonoB => "pokemon-b",
                 _ => "pokemon",
             },
+            Palette::Cyberpunk => match role {
+                Role::Display => "cyber-b",
+                Role::SansB => "cyber-sb",
+                Role::Mono | Role::MonoB => "cyber-mono",
+                _ => "cyber",
+            },
             Palette::Default => match role {
                 Role::Sans => "sans",
                 Role::SansB => "sans-b",
@@ -345,7 +431,13 @@ impl Theme {
 
     /// Browsers synthesise bold for single-weight fonts (Genshin); Pokémon disables it.
     pub fn faux_bold(&self, role: Role) -> bool {
-        self.palette == Palette::Genshin && matches!(role, Role::SansB | Role::Display | Role::MonoB)
+        match self.palette {
+            Palette::Genshin => matches!(role, Role::SansB | Role::Display | Role::MonoB),
+            // Share Tech Mono only ships one weight, so the mono read-out is
+            // double-struck to read as bold on dark panels.
+            Palette::Cyberpunk => role == Role::MonoB,
+            _ => false,
+        }
     }
 
     pub fn font(&self, role: Role, size: f32) -> FontId {

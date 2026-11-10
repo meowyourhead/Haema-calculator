@@ -11,6 +11,10 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 # Developer-only: HAEM_SHOT=<file.png> renders one frame to a PNG and exits.
 screenshot = ["dep:image"]
 
+[target.'cfg(windows)'.dependencies]
+# Read the native window handle so the Genshin cursor override can hook WM_SETCURSOR.
+raw-window-handle = "0.6"
+
 [build-dependencies]
 # Embeds the fox icon (and version strings) into the .exe on Windows.
 winresource = "0.1"

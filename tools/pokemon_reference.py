@@ -1,6 +1,6 @@
 """Extract the Pokémon: Let's Go reference screenshots from the saved Game UI Database pages.
 
-The ``pokemon ui`` folder contains three 9 MB MHTML archives of the same page.
+The ``references/pokemon`` folder contains three 9 MB MHTML archives of the same page.
 This script reads the first one, writes the screenshots as numbered files and
 builds contact sheets so the visual language can be inspected without loading
 the archive into an agent's context.
@@ -23,7 +23,7 @@ import re
 from PIL import Image, ImageDraw
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SOURCES = sorted((ROOT / "pokemon ui").glob("*.mhtml"))
+SOURCES = sorted((ROOT / "references" / "pokemon").glob("*.mhtml"))
 
 TILE_W, TILE_H = 380, 214
 COLS = 5
@@ -78,7 +78,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if not SOURCES:
-        raise SystemExit("no Pokémon MHTML files found in 'pokemon ui'")
+        raise SystemExit("no Pokémon MHTML files found in 'references/pokemon'")
     out = ROOT / args.out
     out.mkdir(parents=True, exist_ok=True)
 

@@ -74,68 +74,16 @@ fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
         if resp.clicked() {
             app.tab = *tab;
         }
+        crate::pikachu::perch(ui, Id::new(("pika-tab", i)), r, crate::pikachu::PerchKind::Hang, resp.is_pointer_button_down_on());
         draws.push(TabDraw { rect: r, idx: i, hovered: resp.hovered(), active: app.tab == *tab });
         x += w + TAB_GAP;
     }
     let tabs_right = x;
 
-    let corners = tab_corners(th);
-    for d in draws.iter().filter(|d| !d.active && d.hovered) {
-        p.rect_filled(d.rect, corners, hover_bg(th));
-    }
-
-    // separator under the strip, interrupted where the active tab opens into the page
-    let (sep_w, sep_c) = match th.palette {
-        Palette::Pokemon => (2.0, rgba(th.ring, 0.35)),
-        Palette::Genshin => (1.0, rgba(th.gold, 0.45)),
-        Palette::Default => (1.0, th.line),
-    };
-    let sep_y = rect.bottom() - sep_w / 2.0;
-    let active_rect = draws.iter().find(|d| d.active).map(|d| d.rect);
-    let spans: Vec<(f32, f32)> = match active_rect {
-        Some(r) => vec![(rect.left(), r.left()), (r.right(), rect.right())],
-        None => vec![(rect.left(), rect.right())],
-    };
-    for (x0, x1) in spans {
-        if x1 > x0 {
-            p.line_segment([pos2(x0, sep_y), pos2(x1, sep_y)], Stroke::new(sep_w, sep_c));
-        }
-    }
-
-    // active tab: page-coloured, rounded top, open at the bottom
-    if let Some(r) = active_rect {
-        let fill = if th.palette == Palette::Pokemon { th.surface } else { th.bg };
-        p.rect_filled(r, corners, fill);
-        let (rad, bw) = if th.palette == Palette::Pokemon { (14.0, 2.0) } else { (8.0, 1.0) };
-        p.add(tab_outline(r, rad, Stroke::new(bw, tab_border(th))));
-        match th.palette {
-            Palette::Genshin => {
-                p.line_segment(
-                    [pos2(r.left() + 10.0, r.top() + 1.5), pos2(r.right() - 10.0, r.top() + 1.5)],
-                    Stroke::new(2.0_f32, th.gold),
-                );
-            }
-            Palette::Pokemon => {
-                // friendly red tick, inset from the rounded corners
-                p.line_segment(
-                    [pos2(r.left() + 16.0, r.top() + 3.0), pos2(r.right() - 16.0, r.top() + 3.0)],
-                    Stroke::new(3.0_f32, th.accent),
-                );
-            }
-            Palette::Default => {}
-        }
-    }
-
-    // labels on top of every fill
-    for d in &draws {
-        let c = if d.active || d.hovered {
-            th.text
-        } else if th.palette == Palette::Genshin && !th.dark {
-            hex(0x454f68)
-        } else {
-            th.muted
-        };
-        text(ui, th, d.rect.center(), Align2::CENTER_CENTER, TABS[d.idx].1, Role::SansB, TAB_FONT, c);
+    if th.palette == Palette::Genshin {
+        paint_genshin_tabs(ui, th, rect, &draws);
+    } else {
+        paint_tabs(ui, th, rect, &p, &draws);
     }
 
     // --- window buttons --------------------------------------------------
@@ -178,6 +126,128 @@ fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
     resize_edges(ui, "top", true);
 }
 
+/// Genshin's notice-board header ("Game | Event"): text tabs on the dark
+/// frame, the active one in bright cream with a short gold underline, a
+/// centre diamond and a faint glow; a champagne hairline closes the strip.
+fn paint_genshin_tabs(ui: &Ui, th: &Theme, rect: Rect, draws: &[TabDraw]) {
+    let p = ui.painter();
+    let gold = hex(0xd3bc8e);
+    let cream = hex(0xece5d8);
+    let sep_y = rect.bottom() - 0.5;
+    // hairline that fades out toward both window edges
+    let mid = rect.center().x;
+    let half = rect.width() / 2.0;
+    h_gradient(p, Rect::from_min_max(pos2(rect.left(), sep_y - 0.5), pos2(mid, sep_y + 0.5)), Color32::TRANSPARENT, rgba(gold, 0.55));
+    h_gradient(p, Rect::from_min_max(pos2(mid, sep_y - 0.5), pos2(rect.right(), sep_y + 0.5)), rgba(gold, 0.55), Color32::TRANSPARENT);
+    let _ = half;
+    for d in draws {
+        let c = if d.active {
+            cream
+        } else if d.hovered {
+            rgba(cream, 0.92)
+        } else {
+            rgba(cream, 0.58)
+        };
+        if d.active {
+            radial(p, pos2(d.rect.center().x, rect.bottom()), d.rect.width() * 0.62, 20.0, rgba(gold, 0.30));
+            let uy = rect.bottom() - 2.5;
+            let w = (d.rect.width() * 0.52).max(28.0);
+            p.line_segment([pos2(d.rect.center().x - w / 2.0, uy), pos2(d.rect.center().x + w / 2.0, uy)], Stroke::new(2.0_f32, gold));
+            diamond(p, pos2(d.rect.center().x, uy), 3.5, gold, Stroke::NONE);
+        } else if d.hovered {
+            let uy = rect.bottom() - 2.5;
+            let w = d.rect.width() * 0.30;
+            p.line_segment([pos2(d.rect.center().x - w / 2.0, uy), pos2(d.rect.center().x + w / 2.0, uy)], Stroke::new(1.0_f32, rgba(gold, 0.6)));
+        }
+        text(ui, th, d.rect.center() + vec2(0.0, -1.0), Align2::CENTER_CENTER, TABS[d.idx].1, Role::SansB, TAB_FONT, c);
+    }
+}
+
+fn paint_tabs(ui: &Ui, th: &Theme, rect: Rect, p: &egui::Painter, draws: &[TabDraw]) {
+    let corners = tab_corners(th);
+    for d in draws.iter().filter(|d| !d.active && d.hovered) {
+        p.rect_filled(d.rect, corners, hover_bg(th));
+    }
+
+    // separator under the strip, interrupted where the active tab opens into the page
+    let (sep_w, sep_c) = match th.palette {
+        Palette::Pokemon => (2.0, rgba(th.ring, 0.35)),
+        Palette::Genshin => (1.0, rgba(th.gold, 0.45)),
+        Palette::Cyberpunk => (1.0, rgba(th.ring, 0.42)),
+        Palette::Default => (1.0, th.line),
+    };
+    let sep_y = rect.bottom() - sep_w / 2.0;
+    let active_rect = draws.iter().find(|d| d.active).map(|d| d.rect);
+    let spans: Vec<(f32, f32)> = match active_rect {
+        Some(r) => vec![(rect.left(), r.left()), (r.right(), rect.right())],
+        None => vec![(rect.left(), rect.right())],
+    };
+    for (x0, x1) in spans {
+        if x1 > x0 {
+            p.line_segment([pos2(x0, sep_y), pos2(x1, sep_y)], Stroke::new(sep_w, sep_c));
+        }
+    }
+
+    // active tab: page-coloured, rounded top, open at the bottom
+    if let Some(r) = active_rect {
+        let fill = if th.palette == Palette::Pokemon { th.surface } else { th.bg };
+        if th.palette == Palette::Cyberpunk {
+            p.rect_filled(r, 0.0, fill);
+            p.add(tab_outline(r, 0.0, Stroke::new(1.0_f32, tab_border(th))));
+            p.line_segment(
+                [pos2(r.left(), r.top() + 1.0), pos2(r.right(), r.top() + 1.0)],
+                Stroke::new(2.0_f32, th.accent),
+            );
+            // small cyan notches at the shoulders read as a HUD tab
+            p.line_segment([pos2(r.left() + 1.0, r.top() + 1.0), pos2(r.left() + 1.0, r.top() + 8.0)], Stroke::new(1.0_f32, th.ring));
+            p.line_segment([pos2(r.right() - 1.0, r.top() + 1.0), pos2(r.right() - 1.0, r.top() + 8.0)], Stroke::new(1.0_f32, th.ring));
+        } else {
+            p.rect_filled(r, corners, fill);
+            let (rad, bw) = if th.palette == Palette::Pokemon { (14.0, 2.0) } else { (8.0, 1.0) };
+            p.add(tab_outline(r, rad, Stroke::new(bw, tab_border(th))));
+            match th.palette {
+                Palette::Genshin => {
+                    p.line_segment(
+                        [pos2(r.left() + 10.0, r.top() + 1.5), pos2(r.right() - 10.0, r.top() + 1.5)],
+                        Stroke::new(2.0_f32, th.gold),
+                    );
+                }
+                Palette::Pokemon => {
+                    // friendly red tick, inset from the rounded corners
+                    p.line_segment(
+                        [pos2(r.left() + 16.0, r.top() + 3.0), pos2(r.right() - 16.0, r.top() + 3.0)],
+                        Stroke::new(3.0_f32, th.accent),
+                    );
+                }
+                Palette::Cyberpunk | Palette::Default => {}
+            }
+        }
+    }
+
+    // labels on top of every fill
+    for d in draws {
+        let c = if d.active || d.hovered {
+            th.text
+        } else if th.palette == Palette::Genshin && !th.dark {
+            hex(0x454f68)
+        } else {
+            th.muted
+        };
+        if th.palette == Palette::Cyberpunk {
+            text_ls(ui, th, d.rect.center(), Align2::CENTER_CENTER, &TABS[d.idx].1.to_uppercase(), Role::SansB, 13.7, c, 0.08);
+        } else {
+            text(ui, th, d.rect.center(), Align2::CENTER_CENTER, TABS[d.idx].1, Role::SansB, TAB_FONT, c);
+        }
+    }
+
+    if th.palette == Palette::Cyberpunk {
+        // Thin service lights at the far ends of the strip.
+        p.line_segment([pos2(rect.left() + 14.0, rect.top() + 1.0), pos2(rect.left() + 152.0, rect.top() + 1.0)], Stroke::new(1.0_f32, rgba(th.accent, 0.55)));
+        p.line_segment([pos2(rect.right() - 204.0, rect.top() + 1.0), pos2(rect.right() - 160.0, rect.top() + 1.0)], Stroke::new(1.0_f32, rgba(th.ring, 0.55)));
+    }
+
+}
+
 // ---------------------------------------------------------------------------
 // Window controls
 // ---------------------------------------------------------------------------
@@ -207,6 +277,7 @@ fn caption(ui: &mut Ui, th: &Theme, rect: Rect, id: &'static str, kind: Caption)
             _ => match th.palette {
                 Palette::Genshin => rgba(hex(0xcbba8c), if pressed { 0.28 } else { 0.16 }),
                 Palette::Pokemon => rgba(th.text, if pressed { 0.16 } else { 0.08 }),
+                Palette::Cyberpunk => rgba(th.ring, if pressed { 0.26 } else { 0.12 }),
                 Palette::Default => rgba(th.text, if pressed { 0.14 } else { 0.075 }),
             },
         };
@@ -217,6 +288,7 @@ fn caption(ui: &mut Ui, th: &Theme, rect: Rect, id: &'static str, kind: Caption)
     };
     let fg = match kind {
         Caption::Close if hovered || pressed => Color32::WHITE,
+        _ if th.palette == Palette::Genshin => hex(0xece5d8),
         _ => th.text,
     };
     let c = rect.center();
@@ -238,7 +310,7 @@ fn caption(ui: &mut Ui, th: &Theme, rect: Rect, id: &'static str, kind: Caption)
             let back = Rect::from_min_size(pos2(c.x - 5.0, c.y - 5.0), vec2(8.0, 8.0));
             let front = back.translate(vec2(2.0, 2.0));
             p.rect_stroke(back, 0.0, stroke, StrokeKind::Inside);
-            p.rect_filled(front.shrink(1.0), 0.0, bg.unwrap_or(th.bg));
+            p.rect_filled(front.shrink(1.0), 0.0, bg.unwrap_or(strip_bg(th)));
             p.rect_stroke(front, 0.0, stroke, StrokeKind::Inside);
         }
         Caption::Close => {
@@ -310,8 +382,11 @@ pub fn resize_frame(ui: &mut Ui) {
 
 fn strip_bg(th: &Theme) -> Color32 {
     match (th.palette, th.dark) {
-        (Palette::Genshin, false) => hex(0xd3cbbb),
-        (Palette::Genshin, true) => hex(0x2f3a4c),
+        // the notice board's dark slate frame, in both modes
+        (Palette::Genshin, false) => hex(0x3b4255),
+        (Palette::Genshin, true) => hex(0x161a24),
+        (Palette::Cyberpunk, true) => hex(0x06090f),
+        (Palette::Cyberpunk, false) => hex(0xdde4e9),
         (Palette::Default, true) => hex(0x1f1f1d),
         _ => th.surface2,
     }
@@ -321,6 +396,7 @@ fn hover_bg(th: &Theme) -> Color32 {
     match th.palette {
         Palette::Genshin => rgba(th.gold, 0.16),
         Palette::Pokemon => th.secondary,
+        Palette::Cyberpunk => rgba(th.ring, 0.12),
         Palette::Default => rgba(th.text, 0.07),
     }
 }
@@ -329,12 +405,17 @@ fn tab_border(th: &Theme) -> Color32 {
     match th.palette {
         Palette::Genshin => rgba(th.gold, 0.55),
         Palette::Pokemon => th.ring,
+        Palette::Cyberpunk => rgba(th.ring, 0.62),
         Palette::Default => th.line,
     }
 }
 
 fn tab_corners(th: &Theme) -> CornerRadius {
-    let r = if th.palette == Palette::Pokemon { 14 } else { 8 };
+    let r = match th.palette {
+        Palette::Pokemon => 14,
+        Palette::Cyberpunk => 0,
+        _ => 8,
+    };
     CornerRadius { nw: r, ne: r, sw: 0, se: 0 }
 }
 

@@ -10,6 +10,12 @@
 # Large captured design references. They are not needed to build the app and
 # can be re-downloaded from Game UI Database when regenerating backdrops.
 *.mhtml
+*.mp4
+
+# Scratch output from tools/*_reference.py and backdrop previews
+/shots/
+__pycache__/
+*.pyc
 
 # OS / editor noise
 Thumbs.db

@@ -16,6 +16,11 @@ pub fn install(ctx: &egui::Context) {
     add(&mut fd, "poppins-m", FontData::from_static(include_bytes!("../assets/fonts/Poppins-500.ttf")));
     add(&mut fd, "lora", FontData::from_static(include_bytes!("../assets/fonts/Lora-Regular.ttf")));
     add(&mut fd, "lora-i", FontData::from_static(include_bytes!("../assets/fonts/Lora-Italic.ttf")));
+    // Cyberpunk: Rajdhani (condensed techno sans) and Share Tech Mono (data).
+    add(&mut fd, "rajdhani-m", FontData::from_static(include_bytes!("../assets/fonts/Rajdhani-Medium.ttf")));
+    add(&mut fd, "rajdhani-sb", FontData::from_static(include_bytes!("../assets/fonts/Rajdhani-SemiBold.ttf")));
+    add(&mut fd, "rajdhani-b", FontData::from_static(include_bytes!("../assets/fonts/Rajdhani-Bold.ttf")));
+    add(&mut fd, "sharetech-mono", FontData::from_static(include_bytes!("../assets/fonts/ShareTechMono-Regular.ttf")));
 
     // Jersey 15 is shown at 115 % in the HTML (size-adjust), Genshin's font at 86 %.
     let mut pixel = FontData::from_static(include_bytes!("../assets/fonts/Jersey15-Regular.ttf"));
@@ -49,6 +54,10 @@ pub fn install(ctx: &egui::Context) {
     fd.families.insert(named("genshin"), fam("genshin"));
     fd.families.insert(named("pokemon"), fam("poppins-m"));
     fd.families.insert(named("pokemon-b"), fam("poppins"));
+    fd.families.insert(named("cyber"), fam("rajdhani-m"));
+    fd.families.insert(named("cyber-sb"), fam("rajdhani-sb"));
+    fd.families.insert(named("cyber-b"), fam("rajdhani-b"));
+    fd.families.insert(named("cyber-mono"), fam("sharetech-mono"));
     let mut mono = vec![mono_key];
     mono.push("Hack".into());
     mono.extend(tail.iter().cloned());

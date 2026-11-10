@@ -10,7 +10,7 @@ Commit only source code, build files and the assets required to build the app:
 - `src/`, `examples/`, `build.rs`, `Cargo.toml`, `Cargo.lock`
 - `assets/` (fonts, icon, baked backdrops are embedded into the executable)
 - `tools/`, `README.md`, `RELEASING.md`, and the small agent/skill files
-- `fox.jpg` (source for the generated icon)
+- `assets/icon/fox.jpg` (source for the generated icon)
 
 Do **not** commit:
 

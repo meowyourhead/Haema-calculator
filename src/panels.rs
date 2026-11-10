@@ -42,27 +42,24 @@ fn overall_status(ck: &Checker) -> Status {
     }
 }
 
+/// A Genshin settings row (Settings / Key Bindings): a soft bar holding the
+/// label, and a brighter value cell on the right whose left edge feathers in
+/// behind a faint sparkle.
 fn genshin_row_overlay(p: &egui::Painter, th: &Theme, rect: Rect, row_w: f32) {
-    if th.dark {
-        fill(p, rect, 2.0, hex(0x434e63));
-        stroke_in(p, rect, 2.0, 1.0, Color32::from_white_alpha(18));
-        let sw = (row_w * 0.34).clamp(150.0, 210.0);
-        let seg = Rect::from_min_max(pos2(rect.right() - sw, rect.top()), rect.max);
-        fill(p, seg, 2.0, Color32::from_black_alpha(51));
+    let r = 5.0;
+    let (base, cell, sparkle) = if th.dark {
+        (hex(0x384053), hex(0x4a5368), rgba(th.gold, 0.55))
     } else {
-        // ivory pill (the CSS gradient, flattened) with faint stars and a gold value segment
-        let a = Color32::from_rgb(0xf6, 0xf2, 0xea);
-        let b = Color32::from_rgb(0xdb, 0xd3, 0xbf);
-        fill(p, rect, pill(), crate::theme::mix(0.5, a, b));
-        let star_c = Color32::from_rgba_unmultiplied(0xc2, 0xa7, 0x6e, 66);
-        let cy = rect.center().y;
-        star(p, pos2(rect.right() - 22.0 - 13.0, cy), 26.0, star_c);
-        star(p, pos2(rect.right() - 62.0 - 9.0, cy), 18.0, star_c);
-        star(p, pos2(rect.right() - 92.0 - 6.0, cy), 12.0, star_c);
-        let sw = (row_w * 0.34).clamp(150.0, 210.0);
-        let seg = Rect::from_min_max(pos2(rect.right() - sw, rect.top()), rect.max);
-        fill(p, seg, pill(), rgba(th.gold, 0.24));
-    }
+        (crate::theme::mix(0.07, hex(0x4a5366), th.surface), hex(0xf8f4ec), rgba(th.gold, 0.60))
+    };
+    fill(p, rect, r, base);
+    let sw = (row_w * 0.34).clamp(150.0, 210.0);
+    let feather = 46.0;
+    let seg = Rect::from_min_max(pos2(rect.right() - sw, rect.top()), rect.max);
+    p.with_clip_rect(seg).rect_filled(rect, cr(r), cell);
+    let fr = Rect::from_min_max(pos2(seg.left() - feather, rect.top()), pos2(seg.left(), rect.bottom()));
+    h_gradient(p, fr, Color32::TRANSPARENT, cell);
+    star(p, pos2(seg.left() - 8.0, rect.center().y), 13.0, sparkle);
 }
 
 fn result_row(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, label: &str, res: &PairResult) {
@@ -78,6 +75,13 @@ fn result_row(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, label: &str, res: &Pai
             stroke_in(&p, r, 12.0, 1.5, rgba(th.ring, 0.35));
         }
         Palette::Genshin => genshin_row_overlay(&p, th, Rect::from_min_size(pos2(pos.x - 14.0, pos.y + 3.0), vec2(w + 28.0, h - 6.0)), w),
+        Palette::Cyberpunk => {
+            let r = Rect::from_min_size(pos2(pos.x - 14.0, pos.y + 3.0), vec2(w + 28.0, h - 6.0));
+            cyber_panel(&p, r, 4.0, rgba(th.surface2, if th.dark { 0.72 } else { 0.55 }), 1.0, rgba(th.ring, 0.20));
+            let sc = status_colors(th, res.status);
+            p.rect_filled(Rect::from_min_size(r.min, vec2(2.0, r.height())), 0.0, rgba(sc, 0.85));
+            p.line_segment([pos2(r.right() - 22.0, r.bottom() - 1.0), pos2(r.right() - 2.0, r.bottom() - 1.0)], Stroke::new(1.0_f32, rgba(th.ring, 0.42)));
+        }
     }
     let mid = pos.y + 1.0 + (h - 1.0) / 2.0;
     text(ui, th, pos2(pos.x + 1.0, mid), Align2::LEFT_CENTER, label, Role::Sans, 12.8, th.muted);
@@ -510,14 +514,20 @@ impl App {
         let r = match th.palette {
             Palette::Genshin => pill(),
             Palette::Pokemon => 14.0,
+            Palette::Cyberpunk => 0.0,
             _ => th.radius,
         };
         let border = match th.palette {
             Palette::Pokemon => th.ring,
             Palette::Genshin => rgba(th.gold, 0.45),
+            Palette::Cyberpunk => rgba(th.ring, 0.55),
             _ => th.line,
         };
-        fill(&p, rect, r, th.surface2);
+        if th.palette == Palette::Cyberpunk {
+            cyber_panel(&p, rect, 4.0, th.surface2, 1.0, border);
+        } else {
+            fill(&p, rect, r, th.surface2);
+        }
         let halves = [
             (Gender::Male, "Male", Rect::from_min_max(rect.min, pos2(rect.center().x, rect.bottom()))),
             (Gender::Female, "Female", Rect::from_min_max(pos2(rect.center().x, rect.top()), rect.max)),
@@ -540,7 +550,11 @@ impl App {
             text(ui, th, half.center(), Align2::CENTER_CENTER, name, Role::SansB, 14.08, fg);
         }
         p.line_segment([pos2(rect.center().x, rect.top() + 1.0), pos2(rect.center().x, rect.bottom() - 1.0)], Stroke::new(1.0, border));
-        stroke_in(&p, rect, r, 1.0, border);
+        if th.palette == Palette::Cyberpunk {
+            cyber_stroke(&p, rect, 4.0, 1.0, border);
+        } else {
+            stroke_in(&p, rect, r, 1.0, border);
+        }
     }
 
     fn helper_body(&mut self, ui: &mut Ui, th: &Theme, iw: f32) {
@@ -674,12 +688,30 @@ fn hero_row(ui: &mut Ui, th: &Theme, pos: Pos2, iw: f32, label_s: &str, value: &
     let p = ui.painter().clone();
     p.line_segment([pos2(pos.x, pos.y + 0.5), pos2(pos.x + iw, pos.y + 0.5)], Stroke::new(1.0, th.line));
     let cy = pos.y + 1.0 + 10.0 + content_h / 2.0;
-    text(ui, th, pos2(pos.x + 1.0, cy), Align2::LEFT_CENTER, label_s, Role::Sans, 13.12, th.muted);
+    if th.palette == Palette::Cyberpunk {
+        text_ls(ui, th, pos2(pos.x + 1.0, cy), Align2::LEFT_CENTER, &label_s.to_uppercase(), Role::MonoB, 11.8, th.muted, 0.06);
+    } else {
+        text(ui, th, pos2(pos.x + 1.0, cy), Align2::LEFT_CENTER, label_s, Role::Sans, 13.12, th.muted);
+    }
     let pr = Rect::from_center_size(pos2(pos.x + iw / 2.0, cy), vec2(pill_w, 34.4));
-    let (fg, bg, bd) = if accent { (th.on_accent, th.accent, th.accent) } else { (th.accent_dark, th.accent_soft, th.accent) };
-    let radius = pill();
-    fill(&p, pr, radius, bg);
-    stroke_in(&p, pr, radius, 1.5, bd);
+    let (fg, bg, bd) = if th.palette == Palette::Cyberpunk {
+        if accent {
+            (th.on_accent, th.accent, th.accent)
+        } else {
+            (th.ring, rgba(th.ring, 0.10), rgba(th.ring, 0.75))
+        }
+    } else if accent {
+        (th.on_accent, th.accent, th.accent)
+    } else {
+        (th.accent_dark, th.accent_soft, th.accent)
+    };
+    let radius = if th.palette == Palette::Cyberpunk { 0.0 } else { pill() };
+    if th.palette == Palette::Cyberpunk {
+        cyber_panel(&p, pr, 5.0, bg, 1.5, bd);
+    } else {
+        fill(&p, pr, radius, bg);
+        stroke_in(&p, pr, radius, 1.5, bd);
+    }
     if rounded {
         let total = vw;
         let x0 = pr.center().x - total / 2.0;
@@ -712,13 +744,16 @@ fn draw_step(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, s: &Step, min_h: f32) -
     };
     if th.palette == Palette::Pokemon {
         p.rect_filled(Rect::from_center_size(num_c, vec2(22.0, 22.0)), 7.0, nb);
+    } else if th.palette == Palette::Cyberpunk {
+        cyber_panel(&p, Rect::from_center_size(num_c, vec2(22.0, 22.0)), 5.0, nb, 1.0, rgba(th.ring, 0.45));
     } else {
         p.circle_filled(num_c, 11.0, nb);
     }
     text(ui, th, num_c, Align2::CENTER_CENTER, &s.num.to_string(), Role::SansB, 11.52, nf);
     let title_c = if pending { th.muted } else { th.text };
     let title_w = iw - 28.0;
-    let tg = galley(ui, th, s.title, Role::Display, 13.76, title_c, 0.0, title_w);
+    let step_title = if th.palette == Palette::Cyberpunk { s.title.to_uppercase() } else { s.title.to_string() };
+    let tg = galley(ui, th, &step_title, Role::Display, 13.76, title_c, if th.palette == Palette::Cyberpunk { 0.04 } else { 0.0 }, title_w);
     let title_h = tg.size().y.max(22.0);
     let one_line = tg.rows.len() <= 1;
     let tw_used = tg.size().x;
@@ -810,8 +845,14 @@ fn draw_step(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, s: &Step, min_h: f32) -
     let h = (y + 8.0 + 1.0 - pos.y).max(min_h);
     let rect = Rect::from_min_size(pos, vec2(w, h));
     let rad = th.radius;
-    p.set(bg_i, egui::Shape::rect_filled(rect, cr(rad), if pending { th.surface2 } else { th.surface }));
-    stroke_in(&p, rect, rad, if th.palette == Palette::Pokemon { 1.5 } else { 1.0 }, if th.palette == Palette::Pokemon { th.line_strong } else { th.line });
+    if th.palette == Palette::Cyberpunk {
+        p.set(bg_i, egui::Shape::convex_polygon(chamfer_points(rect, 5.0), if pending { th.surface2 } else { th.surface }, Stroke::NONE));
+        cyber_stroke(&p, rect, 5.0, 1.0, if pending { th.line } else { rgba(th.ring, 0.24) });
+        p.rect_filled(Rect::from_min_size(rect.min, vec2(2.0, rect.height().min(18.0))), 0.0, if pending { th.line_strong } else { th.accent });
+    } else {
+        p.set(bg_i, egui::Shape::rect_filled(rect, cr(rad), if pending { th.surface2 } else { th.surface }));
+        stroke_in(&p, rect, rad, if th.palette == Palette::Pokemon { 1.5 } else { 1.0 }, if th.palette == Palette::Pokemon { th.line_strong } else { th.line });
+    }
     h
 }
 
