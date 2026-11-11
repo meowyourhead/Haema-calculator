@@ -79,10 +79,15 @@ pub struct App {
     pub menu_btn: Rect,
     genshin_backdrop: egui::TextureHandle,
     pokemon_backdrop: egui::TextureHandle,
-    cyberpunk_backdrop: egui::TextureHandle,
     styled: Option<(Palette, bool)>,
     pika: crate::pikachu::Pikachu,
     paimon: crate::paimon::Paimon,
+    /// Theme mascots shown (Ctrl+H toggles; remembered across launches).
+    pub mascots: bool,
+    /// Cyberpunk theme revealed by typing "2077" (remembered across launches).
+    pub cyberpunk_unlocked: bool,
+    /// The last few characters typed, for spotting the unlock code.
+    typed: String,
     #[cfg(feature = "screenshot")]
     shot: crate::app::Shot,
 }
@@ -104,7 +109,7 @@ pub struct Shot {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::fonts::install(&cc.egui_ctx);
-        let (dark, palette) = load_settings();
+        let Settings { dark, palette, mascots, cyberpunk_unlocked } = Settings::load();
         let mut app = App {
             palette,
             dark,
@@ -123,10 +128,12 @@ impl App {
             menu_btn: Rect::NOTHING,
             genshin_backdrop: genshin_backdrop_texture(&cc.egui_ctx),
             pokemon_backdrop: pokemon_backdrop_texture(&cc.egui_ctx),
-            cyberpunk_backdrop: cyberpunk_backdrop_texture(&cc.egui_ctx),
             styled: None,
             pika: crate::pikachu::Pikachu::new(),
             paimon: crate::paimon::Paimon::new(),
+            mascots,
+            cyberpunk_unlocked,
+            typed: String::new(),
             #[cfg(feature = "screenshot")]
             shot: Default::default(),
         };
@@ -182,18 +189,85 @@ impl App {
             Palette::Cyberpunk => self.dark = true,
             Palette::Default => {}
         }
-        save_settings(self.dark, self.palette);
+        self.save();
     }
 
     pub fn toggle_dark(&mut self) {
         self.dark = !self.dark;
-        save_settings(self.dark, self.palette);
+        self.save();
+    }
+
+    /// Show or hide Pikachu and Paimon. When shown again they make a fresh
+    /// entrance (Pikachu drops in, Paimon teleports in).
+    pub fn toggle_mascots(&mut self) {
+        self.mascots = !self.mascots;
+        self.save();
+    }
+
+    /// Typing "2077" anywhere reveals the Cyberpunk theme in the menu; typing
+    /// it again hides it (and leaves Cyberpunk if it was the active theme).
+    pub fn toggle_cyberpunk_unlock(&mut self) {
+        self.cyberpunk_unlocked = !self.cyberpunk_unlocked;
+        if !self.cyberpunk_unlocked && self.palette == Palette::Cyberpunk {
+            self.palette = Palette::Default;
+        }
+        self.save();
+    }
+
+    /// Watch typed text for the unlock code. Characters still reach whatever
+    /// field has focus; only the last few are remembered here.
+    fn watch_unlock_code(&mut self, ctx: &egui::Context) {
+        let typed: String = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Text(t) => Some(t.as_str()),
+                    _ => None,
+                })
+                .collect()
+        });
+        for _ in 0..feed_unlock_code(&mut self.typed, &typed) {
+            self.toggle_cyberpunk_unlock();
+        }
+    }
+
+    fn save(&self) {
+        Settings { dark: self.dark, palette: self.palette, mascots: self.mascots, cyberpunk_unlocked: self.cyberpunk_unlocked }.save();
     }
 }
 
+/// Typed anywhere in the app to show / hide the Cyberpunk theme.
+const UNLOCK_CODE: &str = "2077";
+
+/// Append typed text to the rolling buffer; returns how many times the unlock
+/// code was completed. The buffer is cleared on a match, so "20772077" counts
+/// twice but the overlapping tail of one code never starts the next.
+fn feed_unlock_code(buf: &mut String, typed: &str) -> usize {
+    let mut hits = 0;
+    for c in typed.chars() {
+        buf.push(c);
+        if buf.chars().count() > UNLOCK_CODE.len() {
+            buf.remove(0);
+        }
+        if buf == UNLOCK_CODE {
+            buf.clear();
+            hits += 1;
+        }
+    }
+    hits
+}
+
 // ---------------------------------------------------------------------------
-// Persistence: %APPDATA%\HaematologyCalculator\settings.txt (theme=… / palette=…)
+// Persistence: %APPDATA%\HaematologyCalculator\settings.txt
+// (theme=… / palette=… / mascots=shown|hidden / cyberpunk=unlocked|locked)
 // ---------------------------------------------------------------------------
+
+struct Settings {
+    dark: bool,
+    palette: Palette,
+    mascots: bool,
+    cyberpunk_unlocked: bool,
+}
 
 fn settings_path() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("APPDATA")
@@ -202,31 +276,76 @@ fn settings_path() -> Option<std::path::PathBuf> {
     Some(base.join("HaematologyCalculator").join("settings.txt"))
 }
 
-fn load_settings() -> (bool, Palette) {
-    let mut dark = false;
-    let mut palette = Palette::Default;
-    if let Some(Ok(s)) = settings_path().map(std::fs::read_to_string) {
-        for line in s.lines() {
+impl Settings {
+    fn load() -> Settings {
+        let mut s = Settings { dark: false, palette: Palette::Default, mascots: true, cyberpunk_unlocked: false };
+        if let Some(Ok(text)) = settings_path().map(std::fs::read_to_string) {
+            s = Settings::parse(&text);
+        }
+        s
+    }
+
+    fn parse(text: &str) -> Settings {
+        let mut s = Settings { dark: false, palette: Palette::Default, mascots: true, cyberpunk_unlocked: false };
+        for line in text.lines() {
             if let Some(v) = line.strip_prefix("theme=") {
-                dark = v.trim() == "dark";
+                s.dark = v.trim() == "dark";
             } else if let Some(v) = line.strip_prefix("palette=") {
-                palette = Palette::from_key(v.trim());
+                s.palette = Palette::from_key(v.trim());
+            } else if let Some(v) = line.strip_prefix("mascots=") {
+                s.mascots = v.trim() != "hidden";
+            } else if let Some(v) = line.strip_prefix("cyberpunk=") {
+                s.cyberpunk_unlocked = v.trim() == "unlocked";
             }
         }
+        // Cyberpunk is a hidden theme: without the unlock it falls back to Default.
+        if s.palette == Palette::Cyberpunk && !s.cyberpunk_unlocked {
+            s.palette = Palette::Default;
+        }
+        s
     }
-    // Cyberpunk is hidden for now: a previously saved choice falls back to Default.
-    if palette == Palette::Cyberpunk {
-        palette = Palette::Default;
+
+    fn save(&self) {
+        if let Some(path) = settings_path() {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(
+                path,
+                format!(
+                    "theme={}\npalette={}\nmascots={}\ncyberpunk={}\n",
+                    if self.dark { "dark" } else { "light" },
+                    self.palette.key(),
+                    if self.mascots { "shown" } else { "hidden" },
+                    if self.cyberpunk_unlocked { "unlocked" } else { "locked" }
+                ),
+            );
+        }
     }
-    (dark, palette)
 }
 
-fn save_settings(dark: bool, palette: Palette) {
-    if let Some(path) = settings_path() {
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(path, format!("theme={}\npalette={}\n", if dark { "dark" } else { "light" }, palette.key()));
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn cyberpunk_needs_unlock() {
+        assert_eq!(Settings::parse("palette=cyberpunk\n").palette, Palette::Default);
+        let s = Settings::parse("palette=cyberpunk\ncyberpunk=unlocked\n");
+        assert_eq!(s.palette, Palette::Cyberpunk);
+        assert!(s.cyberpunk_unlocked);
+        assert!(!Settings::parse("").cyberpunk_unlocked);
+    }
+
+    #[test]
+    fn unlock_code_spans_keystrokes() {
+        let mut buf = String::new();
+        // typed one key per frame, with other text before it
+        let hits: usize = ["1", "2", "0", "7", "7"].iter().map(|k| feed_unlock_code(&mut buf, k)).sum();
+        assert_eq!(hits, 1);
+        assert_eq!(feed_unlock_code(&mut buf, "20772077"), 2);
+        assert_eq!(feed_unlock_code(&mut buf, "207.7"), 0);
+        assert_eq!(feed_unlock_code(&mut buf, "2o77"), 0);
     }
 }
 
@@ -237,6 +356,13 @@ fn save_settings(dark: bool, palette: Palette) {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         crate::cursor::install(frame);
+
+        // Ctrl+H hides / shows the theme mascots. Consumed here so a focused
+        // text field never sees it.
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::H)) {
+            self.toggle_mascots();
+        }
+        self.watch_unlock_code(ctx);
 
         let th = self.theme();
         self.apply_style(ctx, &th);
@@ -250,7 +376,7 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(th.bg)).show(ctx, |ui| {
             let screen = ui.max_rect();
-            paint_page_background(ui, &th, screen, &self.genshin_backdrop, &self.pokemon_backdrop, &self.cyberpunk_backdrop);
+            paint_page_background(ui, &th, screen, &self.genshin_backdrop, &self.pokemon_backdrop);
 
             // Theme controls live in the title bar, so the results get the full
             // width (capped so rows stay scannable on wide monitors).
@@ -287,8 +413,8 @@ impl eframe::App for App {
         }
 
         // Theme mascots: roam the perches registered above.
-        self.pika.tick(ctx, &th, self.palette == Palette::Pokemon);
-        self.paimon.tick(ctx, &th, self.palette == Palette::Genshin);
+        self.pika.tick(ctx, &th, self.mascots && self.palette == Palette::Pokemon);
+        self.paimon.tick(ctx, &th, self.mascots && self.palette == Palette::Genshin);
         #[cfg(feature = "screenshot")]
         {
             if self.shot.pika_sheet {
@@ -328,7 +454,6 @@ fn paint_page_background(
     screen: Rect,
     genshin: &egui::TextureHandle,
     pokemon: &egui::TextureHandle,
-    cyberpunk: &egui::TextureHandle,
 ) {
     let p = ui.painter();
     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
@@ -361,23 +486,30 @@ fn paint_page_background(
             radial(p, sky, 520.0, 300.0, rgba(hex(0x8ed8ef), if th.dark { 0.05 } else { 0.12 }));
         }
         Palette::Cyberpunk => {
-            // A rain-slicked Night City corridor under a smoked datapad veil,
-            // with the HUD's cyan, magenta and red light bleeding through.
-            p.add(egui::Shape::image(cyberpunk.id(), screen, uv, Color32::WHITE));
-            p.rect_filled(screen, 0.0, if th.dark { rgba(th.bg, 0.62) } else { rgba(hex(0xe6ebee), 0.86) });
+            // The menu backdrop: near-black with a deep red glow pooling at
+            // the top and bottom edges, and a fine red grid with scanlines.
+            let red = hex(0x8a1420);
+            let w = screen.width();
+            let h = screen.height();
+            radial(p, pos2(screen.left() + w * 0.5, screen.bottom() + h * 0.10), w * 0.85, h * 0.62, rgba(red, if th.dark { 0.42 } else { 0.035 }));
+            radial(p, pos2(screen.left() + w * 0.16, screen.top() - h * 0.05), w * 0.55, h * 0.45, rgba(red, if th.dark { 0.28 } else { 0.025 }));
+            radial(p, pos2(screen.right() + w * 0.02, screen.top() + h * 0.30), w * 0.40, h * 0.50, rgba(red, if th.dark { 0.20 } else { 0.02 }));
 
-            let cyan = pos2(screen.left() + screen.width() * 0.86, screen.top() + screen.height() * 0.06);
-            radial(p, cyan, 760.0, 420.0, rgba(hex(0x35e8ff), if th.dark { 0.14 } else { 0.05 }));
-            let magenta = pos2(screen.left() + screen.width() * 0.72, screen.bottom() + 40.0);
-            radial(p, magenta, 720.0, 390.0, rgba(hex(0xff2f92), if th.dark { 0.10 } else { 0.03 }));
-            let red = pos2(screen.left() + screen.width() * 0.08, screen.top() + screen.height() * 0.24);
-            radial(p, red, 560.0, 330.0, rgba(hex(0xff1133), if th.dark { 0.08 } else { 0.025 }));
-            let lens = pos2(screen.left() + screen.width() * 0.30, screen.bottom() - 30.0);
-            radial(p, lens, 520.0, 300.0, rgba(hex(0xfcee0a), if th.dark { 0.032 } else { 0.02 }));
+            let grid = Stroke::new(1.0_f32, rgba(th.accent, if th.dark { 0.035 } else { 0.05 }));
+            let mut x = screen.left() + 24.0;
+            while x < screen.right() {
+                p.line_segment([pos2(x, screen.top()), pos2(x, screen.bottom())], grid);
+                x += 48.0;
+            }
+            let mut gy = screen.top() + 24.0;
+            while gy < screen.bottom() {
+                p.line_segment([pos2(screen.left(), gy), pos2(screen.right(), gy)], grid);
+                gy += 48.0;
+            }
 
             // Faint horizontal scanlines keep the scene reading as a terminal.
-            let step = if th.dark { 4.0 } else { 5.0 };
-            let line = Stroke::new(1.0_f32, if th.dark { Color32::from_black_alpha(26) } else { Color32::from_black_alpha(16) });
+            let step = if th.dark { 3.0 } else { 4.0 };
+            let line = Stroke::new(1.0_f32, if th.dark { Color32::from_black_alpha(40) } else { Color32::from_black_alpha(10) });
             let mut y = screen.top();
             while y < screen.bottom() {
                 p.line_segment([pos2(screen.left(), y), pos2(screen.right(), y)], line);
@@ -434,20 +566,28 @@ const MENU_ROW: f32 = 28.0;
 const MENU_GAP: f32 = 4.0;
 const MENU_SPLIT: f32 = 9.0;
 
-fn menu_content_h() -> f32 {
-    // dark-mode row, a divider, then the three palette rows
-    // (Cyberpunk is implemented but hidden for now).
-    MENU_ROW + MENU_SPLIT + 3.0 * (MENU_GAP + MENU_ROW)
+fn menu_content_h(rows: usize) -> f32 {
+    // dark-mode row, a divider, then one row per listed palette
+    MENU_ROW + MENU_SPLIT + rows as f32 * (MENU_GAP + MENU_ROW)
 }
 
 impl App {
+    /// Palettes offered in the theme menu; Cyberpunk only once unlocked.
+    fn menu_palettes(&self) -> Vec<(Palette, &'static str)> {
+        let mut v = vec![(Palette::Default, "Default"), (Palette::Genshin, "Genshin"), (Palette::Pokemon, "Pokémon")];
+        if self.cyberpunk_unlocked {
+            v.push((Palette::Cyberpunk, "Cyberpunk"));
+        }
+        v
+    }
+
     /// The theme popover under the title bar's Theme button. Closes on Esc or
     /// a click anywhere else; stays open while palettes are compared.
     fn theme_menu(&mut self, ctx: &egui::Context) {
         let th = self.theme();
         let panel_w = MENU_W + 20.0;
         let btn = self.menu_btn;
-        let panel = Rect::from_min_size(pos2(btn.right() - panel_w, crate::chrome::CHROME_H + 6.0), vec2(panel_w, menu_content_h() + 28.0));
+        let panel = Rect::from_min_size(pos2(btn.right() - panel_w, crate::chrome::CHROME_H + 6.0), vec2(panel_w, menu_content_h(self.menu_palettes().len()) + 28.0));
         let origin = panel.min + vec2(10.0, 14.0);
         egui::Area::new(Id::new("theme-menu"))
             .order(egui::Order::Foreground)
@@ -466,7 +606,8 @@ impl App {
         let w = MENU_W;
         let toggle_h = MENU_ROW;
         let gap = MENU_GAP;
-        let total_h = menu_content_h();
+        let palettes = self.menu_palettes();
+        let total_h = menu_content_h(palettes.len());
         let sb = Rect::from_min_size(origin, vec2(w + 20.0, total_h));
         let p = ui.painter().clone();
 
@@ -492,14 +633,12 @@ impl App {
                 stroke_in(&p, r.shrink(2.5), th.radius_lg - 2.5, 1.0, rgba(th.ring, 0.35));
             }
             Palette::Cyberpunk => {
-                // A hard-edged NCPD datapad rail with a cyan rim and a yellow
-                // service tab on the left edge.
+                // A chamfered menu panel: near-black, red hairline, a bright
+                // red cap on the top edge.
                 let r = Rect::from_min_max(pos2(sb.left() - 10.0, sb.top() - 14.0), pos2(sb.right() - 10.0, sb.bottom() + 14.0));
-                fill(&p, r.translate(vec2(0.0, 2.0)), th.radius_lg, rgba(th.bg, 0.55));
-                fill(&p, r, th.radius_lg, rgba(th.surface, 0.94));
-                stroke_in(&p, r, th.radius_lg, 1.0, rgba(th.ring, 0.55));
-                p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, th.accent);
-                p.line_segment([pos2(r.left() + 9.0, r.top() + 1.0), pos2(r.right() - 9.0, r.top() + 1.0)], Stroke::new(1.0_f32, rgba(th.accent, 0.65)));
+                crate::ui::cyber_fill(&p, r.translate(vec2(0.0, 3.0)), 9.0, Color32::from_black_alpha(140));
+                cyber_panel(&p, r, 9.0, if th.dark { rgba(th.surface, 0.97) } else { th.surface }, 1.0, rgba(th.accent, 0.60));
+                p.line_segment([pos2(r.left() + 1.0, r.top() + 1.0), pos2(r.left() + 46.0, r.top() + 1.0)], Stroke::new(2.0_f32, th.accent));
             }
             Palette::Default => {
                 let r = Rect::from_min_max(pos2(sb.left() - 10.0, sb.top() - 14.0), pos2(sb.right() - 10.0, sb.bottom() + 14.0));
@@ -551,14 +690,7 @@ impl App {
         y += MENU_SPLIT - gap;
 
         // --- palettes
-        // Cyberpunk is intentionally omitted while the theme is parked.
-        for (i, (pal, name)) in [
-            (Palette::Default, "Default"),
-            (Palette::Genshin, "Genshin"),
-            (Palette::Pokemon, "Pokémon"),
-        ]
-        .iter()
-        .enumerate()
+        for (i, (pal, name)) in palettes.iter().enumerate()
         {
             y += gap;
             let rect = Rect::from_min_size(pos2(origin.x, y), vec2(w, toggle_h));
@@ -578,10 +710,11 @@ impl App {
                     (th.text, Color32::TRANSPARENT, th.line_strong)
                 }
             } else if th.palette == Palette::Cyberpunk {
+                // the selected list row is a solid red bar with dark type
                 if active {
-                    (th.text, th.accent, th.accent)
+                    (th.on_accent, th.on_accent, th.on_accent)
                 } else {
-                    (th.text, Color32::TRANSPARENT, th.line_strong)
+                    (th.accent, Color32::TRANSPARENT, th.accent)
                 }
             } else if active {
                 (th.accent_dark, th.accent, th.accent)
@@ -605,9 +738,9 @@ impl App {
                         &p,
                         sc,
                         9.0,
-                        if active { th.accent } else { Color32::TRANSPARENT },
+                        sw_fill,
                         sw_border,
-                        if active { th.on_accent } else { th.ring },
+                        if active { th.accent } else { th.ring },
                     );
                 }
             }
@@ -673,18 +806,17 @@ fn side_toggle(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, active: bool) -> egu
             }
         }
         Palette::Cyberpunk => {
+            // Game list rows: red-outlined, a small red tab on the left, and a
+            // solid red bar for the selected entry.
             let (bg, border) = if active {
-                (th.accent_soft, th.accent)
+                (th.accent, th.accent)
             } else if hovered {
-                (rgba(th.ring, 0.10), rgba(th.ring, 0.65))
+                (rgba(th.accent, 0.14), th.accent)
             } else {
-                (Color32::TRANSPARENT, rgba(th.line, 0.75))
+                (rgba(th.surface, 0.6), rgba(th.accent, 0.40))
             };
-            fill(&p, rect, r, bg);
-            stroke_in(&p, rect, r, 1.0, border);
-            if active {
-                p.rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), 0.0, th.accent);
-            }
+            cyber_panel(&p, rect, 4.0, bg, 1.0, border);
+            p.rect_filled(Rect::from_min_size(rect.min - vec2(6.0, 0.0), vec2(3.0, rect.height())), 0.0, rgba(th.accent, if active { 1.0 } else { 0.55 }));
         }
     }
     resp
@@ -713,7 +845,13 @@ impl App {
                         _ => Tab::Fbc,
                     }
                 }
-                "palette" => self.palette = Palette::from_key(v),
+                "palette" => {
+                    self.palette = Palette::from_key(v);
+                    if self.palette == Palette::Cyberpunk {
+                        self.cyberpunk_unlocked = true;
+                    }
+                }
+                "cyber" => self.cyberpunk_unlocked = v == "1",
                 "dark" => self.dark = v == "1",
                 "fill" => fill_data = v == "1",
                 "calc" => self.calc_open = v == "1",

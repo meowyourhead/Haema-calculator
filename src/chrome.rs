@@ -181,7 +181,7 @@ fn paint_tabs(ui: &Ui, th: &Theme, rect: Rect, p: &egui::Painter, draws: &[TabDr
     let (sep_w, sep_c) = match th.palette {
         Palette::Pokemon => (2.0, rgba(th.ring, 0.35)),
         Palette::Genshin => (1.0, rgba(th.gold, 0.45)),
-        Palette::Cyberpunk => (1.0, rgba(th.ring, 0.42)),
+        Palette::Cyberpunk => (1.0, rgba(th.accent, 0.45)),
         Palette::Default => (1.0, th.line),
     };
     let sep_y = rect.bottom() - sep_w / 2.0;
@@ -200,15 +200,14 @@ fn paint_tabs(ui: &Ui, th: &Theme, rect: Rect, p: &egui::Painter, draws: &[TabDr
     if let Some(r) = active_rect {
         let fill = if th.palette == Palette::Pokemon { th.surface } else { th.bg };
         if th.palette == Palette::Cyberpunk {
-            p.rect_filled(r, 0.0, fill);
-            p.add(tab_outline(r, 0.0, Stroke::new(1.0_f32, tab_border(th))));
+            // The game's top nav: the selected section is cyan on a faint cyan
+            // wash with a solid underline; no tab box at all.
+            let _ = fill;
+            crate::ui::v_gradient(p, r, rgba(th.ring, 0.0), rgba(th.ring, 0.16));
             p.line_segment(
-                [pos2(r.left(), r.top() + 1.0), pos2(r.right(), r.top() + 1.0)],
-                Stroke::new(2.0_f32, th.accent),
+                [pos2(r.left() + 6.0, r.bottom() - 1.5), pos2(r.right() - 6.0, r.bottom() - 1.5)],
+                Stroke::new(3.0_f32, th.ring),
             );
-            // small cyan notches at the shoulders read as a HUD tab
-            p.line_segment([pos2(r.left() + 1.0, r.top() + 1.0), pos2(r.left() + 1.0, r.top() + 8.0)], Stroke::new(1.0_f32, th.ring));
-            p.line_segment([pos2(r.right() - 1.0, r.top() + 1.0), pos2(r.right() - 1.0, r.top() + 8.0)], Stroke::new(1.0_f32, th.ring));
         } else {
             p.rect_filled(r, corners, fill);
             let (rad, bw) = if th.palette == Palette::Pokemon { (14.0, 2.0) } else { (8.0, 1.0) };
@@ -234,7 +233,15 @@ fn paint_tabs(ui: &Ui, th: &Theme, rect: Rect, p: &egui::Painter, draws: &[TabDr
 
     // labels on top of every fill
     for d in draws {
-        let c = if d.active || d.hovered {
+        let c = if th.palette == Palette::Cyberpunk {
+            if d.active {
+                th.ring
+            } else if d.hovered {
+                th.accent_dark
+            } else {
+                th.muted
+            }
+        } else if d.active || d.hovered {
             th.text
         } else if th.palette == Palette::Genshin && !th.dark {
             hex(0x454f68)
@@ -249,9 +256,9 @@ fn paint_tabs(ui: &Ui, th: &Theme, rect: Rect, p: &egui::Painter, draws: &[TabDr
     }
 
     if th.palette == Palette::Cyberpunk {
-        // Thin service lights at the far ends of the strip.
+        // Short red service ticks at the far ends of the strip.
         p.line_segment([pos2(rect.left() + 14.0, rect.top() + 1.0), pos2(rect.left() + 152.0, rect.top() + 1.0)], Stroke::new(1.0_f32, rgba(th.accent, 0.55)));
-        p.line_segment([pos2(rect.right() - 204.0, rect.top() + 1.0), pos2(rect.right() - 160.0, rect.top() + 1.0)], Stroke::new(1.0_f32, rgba(th.ring, 0.55)));
+        p.line_segment([pos2(rect.right() - 204.0, rect.top() + 1.0), pos2(rect.right() - 160.0, rect.top() + 1.0)], Stroke::new(1.0_f32, rgba(th.accent, 0.35)));
     }
 
 }
@@ -354,7 +361,7 @@ fn theme_button(ui: &mut Ui, th: &Theme, rect: Rect, open: bool) -> Response {
         let a = if open { 1.6 } else { 1.0 };
         let c = match th.palette {
             Palette::Genshin => rgba(hex(0xcbba8c), 0.16 * a),
-            Palette::Cyberpunk => rgba(th.ring, 0.12 * a),
+            Palette::Cyberpunk => rgba(th.accent, 0.12 * a),
             _ => rgba(th.text, 0.075 * a),
         };
         fill(p, rect, r, c);
@@ -362,7 +369,7 @@ fn theme_button(ui: &mut Ui, th: &Theme, rect: Rect, open: bool) -> Response {
     let border = match th.palette {
         Palette::Genshin => rgba(hex(0xd3bc8e), 0.55),
         Palette::Pokemon => rgba(th.ring, 0.55),
-        Palette::Cyberpunk => rgba(th.ring, 0.45),
+        Palette::Cyberpunk => rgba(th.accent, 0.60),
         Palette::Default => th.line_strong,
     };
     stroke_in(p, rect, r, 1.0, border);
@@ -444,8 +451,8 @@ fn strip_bg(th: &Theme) -> Color32 {
         // the notice board's dark slate frame, in both modes
         (Palette::Genshin, false) => hex(0x3b4255),
         (Palette::Genshin, true) => hex(0x161a24),
-        (Palette::Cyberpunk, true) => hex(0x06090f),
-        (Palette::Cyberpunk, false) => hex(0xdde4e9),
+        (Palette::Cyberpunk, true) => hex(0x07060a),
+        (Palette::Cyberpunk, false) => hex(0xebe5e2),
         (Palette::Default, true) => hex(0x1f1f1d),
         _ => th.surface2,
     }
@@ -455,7 +462,7 @@ fn hover_bg(th: &Theme) -> Color32 {
     match th.palette {
         Palette::Genshin => rgba(th.gold, 0.16),
         Palette::Pokemon => th.secondary,
-        Palette::Cyberpunk => rgba(th.ring, 0.12),
+        Palette::Cyberpunk => rgba(th.accent, 0.10),
         Palette::Default => rgba(th.text, 0.07),
     }
 }

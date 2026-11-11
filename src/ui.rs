@@ -108,13 +108,37 @@ pub fn pokemon_backdrop_texture(ctx: &egui::Context) -> egui::TextureHandle {
     ctx.load_texture("pokemon-backdrop", image, egui::TextureOptions::LINEAR)
 }
 
-/// The Cyberpunk backdrop: a blurred magenta/cyan Night City corridor.
-pub fn cyberpunk_backdrop_texture(ctx: &egui::Context) -> egui::TextureHandle {
-    const W: usize = 192;
-    const H: usize = 108;
-    let pixels = include_bytes!("../assets/cyberpunk-backdrop.rgba");
-    let image = egui::ColorImage::from_rgba_unmultiplied([W, H], pixels);
-    ctx.load_texture("cyberpunk-backdrop", image, egui::TextureOptions::LINEAR)
+/// Vertical gradient strip (top colour to bottom colour).
+pub fn v_gradient(p: &Painter, rect: Rect, top: Color32, bottom: Color32) {
+    let mut m = Mesh::default();
+    m.colored_vertex(rect.left_top(), top);
+    m.colored_vertex(rect.right_top(), top);
+    m.colored_vertex(rect.right_bottom(), bottom);
+    m.colored_vertex(rect.left_bottom(), bottom);
+    m.add_triangle(0, 1, 2);
+    m.add_triangle(0, 2, 3);
+    p.add(Shape::mesh(m));
+}
+
+/// The Cyberpunk "alert" treatment for anything flagged: a solid flag-red
+/// block with dark type, plus a cyan copy knocked a few pixels off-register
+/// like the game's glitching hostile tags. Everyday UI red stays the softer
+/// salmon, so this is the only loud red on screen.
+pub fn cyber_alert_block(p: &Painter, th: &Theme, rect: Rect, cut: f32) {
+    cyber_stroke(p, rect.translate(vec2(-2.5, 2.0)), cut, 1.0, rgba(th.ring, 0.85));
+    cyber_fill(p, rect, cut, th.bad);
+}
+
+/// Cyan L-brackets in the two square corners: the game's selection cursor.
+pub fn cyber_focus_box(p: &Painter, th: &Theme, rect: Rect) {
+    let st = Stroke::new(2.0_f32, th.ring);
+    let a = 7.0;
+    let tl = rect.left_top() + vec2(3.0, 3.0);
+    p.line_segment([tl, tl + vec2(a, 0.0)], st);
+    p.line_segment([tl, tl + vec2(0.0, a)], st);
+    let br = rect.right_bottom() - vec2(3.0, 3.0);
+    p.line_segment([br, br - vec2(a, 0.0)], st);
+    p.line_segment([br, br - vec2(0.0, a)], st);
 }
 
 pub fn fill(p: &Painter, rect: Rect, r: f32, c: Color32) {
@@ -424,7 +448,10 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
     let (size, role, pad_x, h) = if small { (12.8, Role::SansB, 12.0, 32.0) } else { (13.44, Role::SansB, 14.0, 36.0) };
     let ls = if th.palette == Palette::Cyberpunk { 0.05 } else { 0.0 };
     let tw = text_width(ui, th, label, role, size) + ls * size * label.chars().count() as f32;
-    let icon_w = if g_icon.is_some() { 24.0 } else { 0.0 };
+    // Cyberpunk secondary actions lead with the cyan controller-prompt disc
+    // of the game's BACK / NEXT / CLOSE buttons.
+    let c_icon = th.palette == Palette::Cyberpunk && !small && kind != Btn::Primary;
+    let icon_w = if g_icon.is_some() { 24.0 } else if c_icon { 18.0 } else { 0.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(tw + icon_w + pad_x * 2.0 + 2.0, h), if enabled { Sense::click() } else { Sense::hover() });
     if enabled {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
@@ -494,39 +521,32 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
             }
         }
         Palette::Cyberpunk => {
-            // Night City controls: clipped rectangles, acid-yellow CTA,
-            // cyan outline for secondary actions, no soft shadows.
+            // Menu controls: a selected-row red bar for the main action,
+            // dark red-outlined plates for everything else. No soft shadows.
             radius = 0.0;
-            let hot = if th.dark { th.accent_dark } else { th.accent };
             match kind {
                 Btn::Primary => {
                     bg = if hovered { th.accent_dark } else { th.accent };
                     border = th.accent_dark;
                     fg = th.on_accent;
                     if hovered {
-                        glow = Some(rgba(th.accent, 0.34));
+                        glow = Some(rgba(th.accent, 0.30));
                     }
                 }
                 Btn::Secondary => {
-                    bg = if hovered { rgba(th.ring, 0.14) } else { rgba(th.surface, 0.55) };
-                    border = if hovered { th.ring } else { rgba(th.ring, 0.55) };
-                    fg = th.text;
-                    if hovered {
-                        glow = Some(rgba(th.ring, 0.22));
-                    }
+                    bg = if hovered { rgba(th.accent, 0.14) } else { rgba(th.surface, 0.80) };
+                    border = if hovered { th.accent } else { rgba(th.accent, 0.62) };
+                    fg = if hovered { th.text } else { th.accent };
                 }
                 Btn::Soft => {
-                    bg = rgba(th.accent, if hovered { 0.18 } else { 0.09 });
-                    border = if hovered { th.accent } else { rgba(th.accent, 0.72) };
-                    fg = hot;
-                    if hovered {
-                        glow = Some(rgba(th.accent, 0.26));
-                    }
+                    bg = rgba(th.accent, if hovered { 0.20 } else { 0.10 });
+                    border = if hovered { th.accent } else { rgba(th.accent, 0.80) };
+                    fg = th.accent;
                 }
                 Btn::Mini => {
-                    bg = if hovered { rgba(th.ring, 0.14) } else { Color32::TRANSPARENT };
-                    border = if hovered { th.ring } else { rgba(th.ring, 0.55) };
-                    fg = if hovered { th.ring } else { th.text };
+                    bg = if hovered { rgba(th.accent, 0.14) } else { Color32::TRANSPARENT };
+                    border = if hovered { th.accent } else { rgba(th.accent, 0.55) };
+                    fg = if hovered { th.text } else { th.accent };
                 }
                 Btn::MiniMuted => {
                     bg = if hovered { rgba(th.text, 0.08) } else { Color32::TRANSPARENT };
@@ -596,12 +616,6 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
     if th.palette == Palette::Cyberpunk {
         let cut = if small { 5.0 } else { 6.0 };
         cyber_panel(p, rect, cut, dim(bg), border_w, dim(border));
-        // A yellow data tick on the leading edge ties the control to the HUD.
-        let tick = if matches!(kind, Btn::Primary) { rgba(th.on_accent, 0.55) } else { rgba(th.accent, 0.85) };
-        p.line_segment(
-            [rect.left_top() + vec2(2.0, cut + 3.0), rect.left_bottom() + vec2(2.0, -4.0)],
-            Stroke::new(2.0_f32, tick),
-        );
     } else {
         fill(p, rect, radius, dim(bg));
         stroke_in(p, rect, radius, border_w, dim(border));
@@ -611,6 +625,11 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
         let core = if bg.a() == 255 { bg } else { crate::theme::hex(0x4a5366) };
         genshin_icon(p, c, 9.0, icon, dim(core));
         text(ui, th, pos2(rect.left() + 36.0, rect.center().y), Align2::LEFT_CENTER, label, role, size, dim(fg));
+    } else if c_icon {
+        let c = pos2(rect.left() + 17.0, rect.center().y);
+        p.circle_filled(c, 6.0, dim(th.ring));
+        p.circle_filled(c, 2.6, dim(th.surface));
+        text_ls(ui, th, pos2(rect.left() + 29.0, rect.center().y), Align2::LEFT_CENTER, label, role, size, dim(fg), ls);
     } else if th.palette == Palette::Cyberpunk {
         text_ls(ui, th, rect.center(), Align2::CENTER_CENTER, label, role, size, dim(fg), ls);
     } else {
@@ -630,7 +649,7 @@ pub const LABEL_GAP: f32 = 7.0;
 /// Uppercase caption above a control.
 pub fn label(ui: &Ui, th: &Theme, pos: Pos2, s: &str) {
     if th.palette == Palette::Cyberpunk {
-        text_ls(ui, th, pos, Align2::LEFT_TOP, &s.to_uppercase(), Role::MonoB, 10.56, th.muted, 0.08);
+        text_ls(ui, th, pos, Align2::LEFT_TOP, &s.to_uppercase(), Role::SansB, 11.5, th.muted, 0.09);
     } else {
         text_ls(ui, th, pos, Align2::LEFT_TOP, &s.to_uppercase(), Role::SansB, 10.88, th.muted, 0.03);
     }
@@ -703,29 +722,24 @@ pub fn field_s(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, 
     if flagged {
         border = flag_c;
     }
-    if focused {
+    if focused && !cyber {
         let ring = match th.palette {
             Palette::Genshin => rgba(th.gold, 0.65),
             Palette::Pokemon => rgba(th.ring, 0.42),
-            Palette::Cyberpunk => rgba(th.ring, 0.42),
             _ => rgba(th.ring, 0.40),
         };
-        if cyber {
-            p.add(Shape::closed_line(chamfer_points(rect.expand(2.0), 6.0), Stroke::new(3.0, ring)));
-        } else {
-            p.rect_stroke(rect.expand(1.5), cr(r + 1.5), Stroke::new(3.0, ring), StrokeKind::Middle);
-        }
+        p.rect_stroke(rect.expand(1.5), cr(r + 1.5), Stroke::new(3.0, ring), StrokeKind::Middle);
     }
     if cyber {
-        cyber_panel(&p, rect, 4.0, bg, 1.0, border);
+        // Dark outlined data cell; focus is the cyan selection cursor.
         if focused {
-            p.rect_filled(Rect::from_min_size(rect.min + vec2(0.0, 4.0), vec2(2.0, rect.height() - 8.0)), 0.0, th.accent);
+            bg = rgba(th.ring, 0.06);
         }
-        // faint top scanline inside the data cell
-        p.line_segment(
-            [rect.left_top() + vec2(8.0, 2.0), rect.right_top() + vec2(-8.0, 2.0)],
-            Stroke::new(1.0_f32, rgba(th.ring, if focused { 0.28 } else { 0.10 })),
-        );
+        cyber_panel(&p, rect, 4.0, th.field, 0.0, Color32::TRANSPARENT);
+        cyber_panel(&p, rect, 4.0, bg, if flagged { 2.0 } else { 1.0 }, border);
+        if focused {
+            cyber_focus_box(&p, th, rect);
+        }
     } else {
         fill(&p, rect, r, bg);
         if pk && !focused {
@@ -745,7 +759,13 @@ pub fn field_s(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, 
         stroke_in(&p, rect, r, if flagged { 2.0 } else if pk { 1.5 } else { 1.0 }, border);
     }
     let mut pad_r = 0.0;
-    if flagged {
+    if flagged && cyber {
+        // inverted alert tag on the cell's right edge
+        let tag = Rect::from_min_max(pos2(rect.right() - 26.0, rect.top() + 7.0), pos2(rect.right() - 7.0, rect.bottom() - 7.0));
+        cyber_alert_block(&p, th, tag, 4.0);
+        status_glyph(&p, tag.center(), 6.0, crate::logic::Status::Bad, th.on_accent);
+        pad_r = 22.0;
+    } else if flagged {
         let gc = pos2(rect.right() - if gen { 20.0 } else { 14.0 }, rect.center().y);
         status_glyph(&p, gc, 6.0, crate::logic::Status::Bad, flag_c);
         pad_r = 14.0;
@@ -822,7 +842,12 @@ pub fn status_glyph(p: &Painter, c: Pos2, r: f32, s: crate::logic::Status, color
 /// `pos` is interpreted through `anchor`; returns the capsule rect.
 #[allow(clippy::too_many_arguments)]
 pub fn status_pill(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, msg: &str, s: crate::logic::Status, h: f32, size: f32) -> Rect {
-    let (fg, bg) = status_fg_bg(th, s);
+    let (mut fg, mut bg) = status_fg_bg(th, s);
+    let alert = th.palette == Palette::Cyberpunk && s == crate::logic::Status::Bad;
+    if alert {
+        // inverted: dark type on the solid flag-red block
+        (fg, bg) = (th.on_accent, th.bad);
+    }
     let msg = if th.palette == Palette::Cyberpunk { msg.to_uppercase() } else { msg.to_string() };
     let g = galley(ui, th, &msg, Role::SansB, size, fg, if th.palette == Palette::Cyberpunk { 0.05 } else { 0.0 }, f32::INFINITY);
     let disc = h - 12.0;
@@ -831,7 +856,9 @@ pub fn status_pill(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, msg: &str, s:
     let w = pad_l + disc + 8.0 + g.size().x + pad_r;
     let rect = anchor.anchor_size(pos, vec2(w, h));
     let p = ui.painter();
-    if th.palette == Palette::Cyberpunk {
+    if alert {
+        cyber_alert_block(p, th, rect, 5.0);
+    } else if th.palette == Palette::Cyberpunk {
         cyber_panel(p, rect, 5.0, bg, 1.5, rgba(fg, 0.85));
     } else {
         fill(p, rect, pill(), bg);
@@ -877,6 +904,15 @@ pub fn badge(ui: &Ui, th: &Theme, right_mid: Pos2, s: &str, status: crate::logic
     let (color, _) = status_fg_bg(th, status);
     let color = if status == crate::logic::Status::Pending { th.muted } else { color };
     let label = if th.palette == Palette::Cyberpunk { s.to_uppercase() } else { s.to_string() };
+    if th.palette == Palette::Cyberpunk && status == crate::logic::Status::Bad {
+        let g = galley(ui, th, &label, Role::SansB, 12.0, th.on_accent, 0.05, f32::INFINITY);
+        let w = g.size().x + 26.0;
+        let rect = Rect::from_min_max(pos2(right_mid.x - w, right_mid.y - 10.0), pos2(right_mid.x, right_mid.y + 10.0));
+        cyber_alert_block(ui.painter(), th, rect, 4.0);
+        status_glyph(ui.painter(), pos2(rect.left() + 9.0, right_mid.y), 6.0, status, th.on_accent);
+        paint_galley(ui.painter(), th, Role::SansB, pos2(rect.left() + 18.0, right_mid.y - g.size().y / 2.0), g, th.on_accent);
+        return w;
+    }
     let g = galley(ui, th, &label, Role::SansB, 12.0, color, 0.0, f32::INFINITY);
     let w = g.size().x + 17.0;
     let left = right_mid.x - w;
@@ -976,11 +1012,19 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
     let gen = th.palette == Palette::Genshin;
     // Genshin cards are framed dialogs; the parameter colour becomes a small
     // element gem beside the title instead of a coloured left edge.
-    let bl = if o.bar.is_some() && !gen { 4.0 } else { 1.0 };
+    // Cyberpunk cards share one red frame; the parameter colour shrinks to a
+    // small data-chip tag in front of a red heading.
+    let bl = if o.bar.is_some() && !gen && !cyber { 4.0 } else { 1.0 };
     let head_y = min.y;
-    let title_c = o.title_color.unwrap_or(th.text);
+    let title_c = if cyber { th.accent } else { o.title_color.unwrap_or(th.text) };
     // header text
     let mut tx = min.x + bl + 20.0;
+    if cyber {
+        if let Some(b) = o.bar {
+            cyber_chip(&ui.painter(), pos2(tx + 5.0, head_y + 30.0), 11.0, b, b, rgba(th.surface, 0.85));
+            tx += 18.0;
+        }
+    }
     if gen {
         if let Some(b) = o.bar {
             let gc = pos2(tx + 6.0, head_y + 30.0);
@@ -1045,12 +1089,12 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
     let full = |c: Color32| Shape::rect_filled(rect, cr(r), c);
     if cyber {
         p.set(shadow_i, Shape::convex_polygon(chamfer_points(rect.translate(vec2(0.0, 2.0)), cut), Color32::from_black_alpha(if th.dark { 120 } else { 32 }), Stroke::NONE));
-        p.set(bg_i, Shape::convex_polygon(chamfer_points(rect, cut), if th.dark { rgba(th.surface, 0.94) } else { th.surface }, Stroke::NONE));
-        if let Some(hb) = o.head_bg {
-            p.set(band_i, cyber_band(rect, cut, HEAD_H, hb));
-        }
-        if let Some(b) = bar {
-            p.set(bar_i, cyber_bar(rect, cut, 4.0, b));
+        p.set(bg_i, Shape::convex_polygon(chamfer_points(rect, cut), if th.dark { rgba(th.surface, 0.90) } else { th.surface }, Stroke::NONE));
+        // every card gets the same faint red title band
+        let _ = o.head_bg;
+        p.set(band_i, cyber_band(rect, cut, HEAD_H, rgba(th.accent, if th.dark { 0.045 } else { 0.05 })));
+        if o.alert {
+            p.set(bar_i, cyber_bar(rect, cut, 4.0, th.bad));
         }
     } else {
         p.set(shadow_i, card_shadow(&p, th, rect, r));
@@ -1073,32 +1117,31 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
         Palette::Pokemon => {
             if th.dark { rgba(th.text, 0.24) } else { Color32::from_white_alpha(235) }
         }
-        Palette::Cyberpunk => rgba(th.ring, if th.dark { 0.30 } else { 0.38 }),
+        Palette::Cyberpunk => rgba(th.accent, if th.dark { 0.42 } else { 0.50 }),
         _ => th.line,
     };
     let border_w = if th.palette == Palette::Pokemon { 2.5 } else { 1.0 };
     if cyber {
         cyber_stroke(&p, rect, cut, 1.0, border);
-        // A bright service rail on the left (or a yellow tab above the card's
-        // own parameter bar) plus an L-bracket at the bottom-right.
-        if o.bar.is_some() {
-            p.line_segment(
-                [pos2(rect.left() + 4.0, rect.top() + 1.0), pos2(rect.left() + 38.0, rect.top() + 1.0)],
-                Stroke::new(2.0_f32, th.accent),
-            );
-        } else {
-            p.line_segment(
-                [pos2(rect.left() + 1.0, rect.top() + 8.0), pos2(rect.left() + 1.0, rect.bottom() - 14.0)],
-                Stroke::new(2.0_f32, rgba(th.accent, 0.75)),
-            );
+        // The stacked red tabs that run down the left of every game list,
+        // a short bright cap on the top edge and an L-bracket bottom-right.
+        if !o.alert {
+            for k in 0..3 {
+                let y = rect.top() + 12.0 + k as f32 * 15.0;
+                p.rect_filled(Rect::from_min_size(pos2(rect.left() - 4.0, y), vec2(3.0, 11.0)), 0.0, rgba(th.accent, 0.80 - 0.22 * k as f32));
+            }
         }
         p.line_segment(
-            [pos2(rect.right() - 26.0, rect.bottom() - 1.0), pos2(rect.right() - 2.0, rect.bottom() - 1.0)],
-            Stroke::new(1.0_f32, rgba(th.ring, 0.55)),
+            [pos2(rect.left() + 1.0, rect.top() + 1.0), pos2(rect.left() + 46.0, rect.top() + 1.0)],
+            Stroke::new(2.0_f32, th.accent),
         );
         p.line_segment(
-            [pos2(rect.right() - 2.0, rect.bottom() - 4.0), pos2(rect.right() - 2.0, rect.bottom() - 16.0)],
-            Stroke::new(1.0_f32, rgba(th.ring, 0.55)),
+            [pos2(rect.right() - 26.0, rect.bottom() + 3.0), pos2(rect.right() + 3.0, rect.bottom() + 3.0)],
+            Stroke::new(1.0_f32, rgba(th.accent, 0.70)),
+        );
+        p.line_segment(
+            [pos2(rect.right() + 3.0, rect.bottom() + 3.0), pos2(rect.right() + 3.0, rect.bottom() - 16.0)],
+            Stroke::new(1.0_f32, rgba(th.accent, 0.70)),
         );
     } else if gen {
         stroke_in(&p, rect, r, 1.0, if th.dark { rgba(Color32::WHITE, 0.09) } else { rgba(th.gold, 0.45) });
@@ -1136,15 +1179,11 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
         Palette::Cyberpunk => {
             p.line_segment(
                 [pos2(min.x + bl + 8.0, divider_y), pos2(min.x + width - 18.0, divider_y)],
-                Stroke::new(1.0_f32, rgba(th.accent, 0.55)),
-            );
-            p.line_segment(
-                [pos2(min.x + bl + 8.0, divider_y), pos2(min.x + bl + 28.0, divider_y)],
-                Stroke::new(2.0_f32, th.accent),
+                Stroke::new(1.0_f32, rgba(th.accent, 0.40)),
             );
             p.line_segment(
                 [pos2(min.x + width - 18.0, divider_y - 3.0), pos2(min.x + width - 18.0, divider_y + 3.0)],
-                Stroke::new(1.0_f32, th.ring),
+                Stroke::new(1.0_f32, th.accent),
             );
         }
         Palette::Default => {

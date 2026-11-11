@@ -136,10 +136,9 @@ fn result_row(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, label: &str, res: &Pai
         Palette::Genshin => genshin_row_overlay(&p, th, Rect::from_min_size(pos2(pos.x - 14.0, pos.y + 3.0), vec2(w + 28.0, h - 6.0)), w),
         Palette::Cyberpunk => {
             let r = Rect::from_min_size(pos2(pos.x - 14.0, pos.y + 3.0), vec2(w + 28.0, h - 6.0));
-            cyber_panel(&p, r, 4.0, rgba(th.surface2, if th.dark { 0.72 } else { 0.55 }), 1.0, rgba(th.ring, 0.20));
+            cyber_panel(&p, r, 4.0, rgba(th.surface2, if th.dark { 0.72 } else { 0.55 }), 1.0, rgba(th.accent, 0.26));
             let sc = status_colors(th, res.status);
             p.rect_filled(Rect::from_min_size(r.min, vec2(2.0, r.height())), 0.0, rgba(sc, 0.85));
-            p.line_segment([pos2(r.right() - 22.0, r.bottom() - 1.0), pos2(r.right() - 2.0, r.bottom() - 1.0)], Stroke::new(1.0_f32, rgba(th.ring, 0.42)));
         }
     }
     let mid = pos.y + 1.0 + (h - 1.0) / 2.0;
@@ -597,7 +596,7 @@ impl App {
         let border = match th.palette {
             Palette::Pokemon => th.ring,
             Palette::Genshin => rgba(th.gold, 0.45),
-            Palette::Cyberpunk => rgba(th.ring, 0.55),
+            Palette::Cyberpunk => rgba(th.accent, 0.62),
             _ => th.line,
         };
         if th.palette == Palette::Cyberpunk {
@@ -802,7 +801,7 @@ fn result_tiles(ui: &mut Ui, th: &Theme, pos: Pos2, iw: f32, tiles: &[Tile]) -> 
         let r = Rect::from_min_size(pos2(x, y), vec2(tw, h));
         bottom = r.bottom();
         match th.palette {
-            Palette::Cyberpunk => cyber_panel(&p, r, 6.0, rgba(th.surface2, if th.dark { 0.80 } else { 1.0 }), 1.0, rgba(th.ring, 0.35)),
+            Palette::Cyberpunk => cyber_panel(&p, r, 6.0, rgba(th.surface2, if th.dark { 0.80 } else { 1.0 }), 1.0, rgba(th.accent, 0.40)),
             Palette::Genshin => {
                 let base = if th.dark { hex(0x384053) } else { crate::theme::mix(0.07, hex(0x4a5366), th.surface) };
                 fill(&p, r, 5.0, base);
@@ -820,7 +819,7 @@ fn result_tiles(ui: &mut Ui, th: &Theme, pos: Pos2, iw: f32, tiles: &[Tile]) -> 
         let x0 = r.left() + TILE_PAD;
         let mut cy = r.top() + TILE_PAD - 2.0;
         if th.palette == Palette::Cyberpunk {
-            text_ls(ui, th, pos2(x0, cy), Align2::LEFT_TOP, &t.label.to_uppercase(), Role::MonoB, 11.8, th.muted, 0.06);
+            text_ls(ui, th, pos2(x0, cy), Align2::LEFT_TOP, &t.label.to_uppercase(), Role::SansB, 12.0, th.muted, 0.08);
         } else {
             text(ui, th, pos2(x0, cy), Align2::LEFT_TOP, t.label, Role::SansB, 13.0, th.muted);
         }
@@ -868,7 +867,7 @@ fn draw_step(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, s: &Step, min_h: f32) -
     if th.palette == Palette::Pokemon {
         p.rect_filled(Rect::from_center_size(num_c, vec2(22.0, 22.0)), 7.0, nb);
     } else if th.palette == Palette::Cyberpunk {
-        cyber_panel(&p, Rect::from_center_size(num_c, vec2(22.0, 22.0)), 5.0, nb, 1.0, rgba(th.ring, 0.45));
+        cyber_panel(&p, Rect::from_center_size(num_c, vec2(22.0, 22.0)), 5.0, nb, 1.0, rgba(th.accent, 0.55));
     } else {
         p.circle_filled(num_c, 11.0, nb);
     }
@@ -971,7 +970,7 @@ fn draw_step(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, s: &Step, min_h: f32) -
     let rad = th.radius;
     if th.palette == Palette::Cyberpunk {
         p.set(bg_i, egui::Shape::convex_polygon(chamfer_points(rect, 5.0), if pending { th.surface2 } else { th.surface }, Stroke::NONE));
-        cyber_stroke(&p, rect, 5.0, 1.0, if pending { th.line } else { rgba(th.ring, 0.24) });
+        cyber_stroke(&p, rect, 5.0, 1.0, if pending { th.line } else { rgba(th.accent, 0.34) });
         p.rect_filled(Rect::from_min_size(rect.min, vec2(2.0, rect.height().min(18.0))), 0.0, if pending { th.line_strong } else { th.accent });
     } else {
         p.set(bg_i, egui::Shape::rect_filled(rect, cr(rad), if pending { th.surface2 } else { th.surface }));

@@ -241,80 +241,76 @@ impl Theme {
                 t.radius_lg = 22.0;
             }
             (Palette::Cyberpunk, false) => {
-                // Corpo daylight: brushed alloy, white datapads and Arasaka red.
-                // Still sharp-cornered and technical, never friendly paper.
-                t.bg = hex(0xe9edf0);
-                t.surface = hex(0xf8fafb);
-                t.surface2 = hex(0xdde4e9);
-                t.secondary = hex(0xd1dae0);
-                t.text = hex(0x0b1620);
-                t.muted = hex(0x4f6574);
-                t.line = hex(0xb9c7d0);
-                t.line_strong = hex(0x8399a8);
-                t.accent = hex(0xd81e3f);
-                t.accent_dark = hex(0xb0132f);
-                t.accent_soft = hex(0xf7dbe1);
-                t.on_accent = hex(0xffffff);
-                t.ring = hex(0x007c96);
-                t.ok = hex(0x0b7a4f);
-                t.ok_bg = hex(0xd7efe4);
-                t.bad = hex(0xc01238);
-                t.bad_bg = hex(0xf8d9e0);
-                t.warn = hex(0x8a5a00);
-                t.warn_bg = hex(0xf6e7c6);
-                t.neutral = hex(0x5f7484);
-                t.neutral_bg = hex(0xdde4e9);
-                t.param = [
-                    (hex(0xb0132f), hex(0xf7dbe1)),
-                    (hex(0x006e88), hex(0xd6edf2)),
-                    (hex(0x7a6b00), hex(0xf3efc7)),
-                    (hex(0x9a1d7c), hex(0xf4d9ee)),
-                ];
-                t.gold = hex(0xc9a600);
-                t.ink = hex(0x0b1620);
-                t.frame = hex(0x007c96);
+                // The game has no light UI; this is the same menu language
+                // printed on pale alloy: red ink, teal interactives, ochre detail.
+                t.bg = hex(0xe4dfdd);
+                t.surface = hex(0xf3efed);
+                t.surface2 = hex(0xebe5e2);
+                t.secondary = hex(0xe0d8d5);
+                t.text = hex(0x1c1013);
+                t.muted = hex(0x8a3a3a);
+                t.line = hex(0xdcbcb8);
+                t.line_strong = hex(0xc0605a);
+                t.accent = hex(0xd23a34);
+                t.accent_dark = hex(0xb52c27);
+                t.accent_soft = mix(0.12, hex(0xd23a34), hex(0xf3efed));
+                t.on_accent = hex(0xfff4f1);
+                t.ring = hex(0x00879a);
+                t.ok = hex(0x0f7a48);
+                t.ok_bg = hex(0xd8eee2);
+                t.bad = hex(0xe0201e);
+                t.bad_bg = hex(0xfbdcd8);
+                t.warn = hex(0x86620a);
+                t.warn_bg = hex(0xf3e6c4);
+                t.neutral = hex(0x6e5a5a);
+                t.neutral_bg = hex(0xe8dfdc);
+                let pf = [hex(0xd23a34), hex(0x00879a), hex(0x9a7200), hex(0x7d3fc4)];
+                t.param = pf.map(|c| (c, mix(0.07, c, hex(0xf3efed))));
+                t.gold = hex(0x9a7200);
+                t.ink = hex(0x1c1013);
+                t.frame = hex(0x00879a);
                 t.hard = rgba(Color32::BLACK, 0.18);
                 t.check = Color32::TRANSPARENT;
-                t.field = hex(0xf3f6f8);
+                t.field = hex(0xfaf7f6);
                 t.radius = 2.0;
                 t.radius_lg = 3.0;
             }
             (Palette::Cyberpunk, true) => {
-                // Night City terminal: near-black blue, acid yellow, cyan data,
-                // magenta and red alerts. Panels are hard-edged datapads.
-                t.bg = hex(0x070a11);
-                t.surface = hex(0x0c131d);
-                t.surface2 = hex(0x0a1018);
-                t.secondary = hex(0x16202c);
-                t.text = hex(0xe6f4ff);
-                t.muted = hex(0x7c93a6);
-                t.line = hex(0x1c3040);
-                t.line_strong = hex(0x36586e);
-                t.accent = hex(0xfcee0a);
-                t.accent_dark = hex(0xffe94a);
-                t.accent_soft = mix(0.16, hex(0xfcee0a), hex(0x0c131d));
-                t.on_accent = hex(0x0a0b05);
-                t.ring = hex(0x35e8ff);
-                t.ok = hex(0x46ff9c);
-                t.ok_bg = hex(0x06301f);
-                t.bad = hex(0xff3b63);
-                t.bad_bg = hex(0x360812);
-                t.warn = hex(0xffb454);
-                t.warn_bg = hex(0x33200a);
-                t.neutral = hex(0x8aa3b5);
-                t.neutral_bg = hex(0x152330);
-                t.param = [
-                    (hex(0xff5c7a), hex(0x3a0f1a)),
-                    (hex(0x48e6ff), hex(0x082b36)),
-                    (hex(0xfcee0a), hex(0x302b08)),
-                    (hex(0xff6ada), hex(0x340b2b)),
-                ];
-                t.gold = hex(0xfcee0a);
-                t.ink = hex(0xe6f4ff);
-                t.frame = hex(0x35e8ff);
+                // The in-game menus (Journal, Messages, Attributes, Inventory):
+                // near-black panels over a deep red vignette, salmon-red type
+                // and hairlines, cyan only for interactive elements, muted gold
+                // for detail boxes, green for "access granted".
+                t.bg = hex(0x0a090e);
+                t.surface = hex(0x120c10);
+                t.surface2 = hex(0x0e0a0d);
+                t.secondary = hex(0x1d1216);
+                t.text = hex(0xefe6e2);
+                t.muted = hex(0xc0675f);
+                t.line = hex(0x4a1d23);
+                t.line_strong = hex(0x8c3b3b);
+                t.accent = hex(0xff6158);
+                t.accent_dark = hex(0xff8178);
+                t.accent_soft = mix(0.16, hex(0xff6158), hex(0x120c10));
+                t.on_accent = hex(0x13080a);
+                t.ring = hex(0x5ef6ff);
+                t.ok = hex(0x3ce38c);
+                t.ok_bg = hex(0x0b2619);
+                t.bad = hex(0xff2d2d);
+                t.bad_bg = hex(0x3b0a0e);
+                t.warn = hex(0xe8c35a);
+                t.warn_bg = hex(0x231b0b);
+                t.neutral = hex(0xb39a95);
+                t.neutral_bg = hex(0x1d1216);
+                // Parameter tags borrow the game's own hues: UI red, data cyan,
+                // legendary gold and epic purple.
+                let pf = [hex(0xff6158), hex(0x5ef6ff), hex(0xe8c35a), hex(0xc27cff)];
+                t.param = pf.map(|c| (c, mix(0.06, c, hex(0x120c10))));
+                t.gold = hex(0xe8c35a);
+                t.ink = hex(0xefe6e2);
+                t.frame = hex(0x5ef6ff);
                 t.hard = rgba(Color32::BLACK, 0.45);
                 t.check = Color32::TRANSPARENT;
-                t.field = hex(0x060b12);
+                t.field = hex(0x0b080b);
                 t.radius = 2.0;
                 t.radius_lg = 3.0;
             }
