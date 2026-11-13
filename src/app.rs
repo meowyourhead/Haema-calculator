@@ -11,7 +11,6 @@ pub enum Tab {
     Fbc,
     Retic,
     PtAptt,
-    Dilution,
 }
 
 pub struct ParamDef {
@@ -19,30 +18,23 @@ pub struct ParamDef {
     pub name: &'static str,
     pub unit: &'static str,
     pub limit: f64,
-    pub ph: [&'static str; 3],
     /// index into `Theme::param` for coloured cards (FBC only)
     pub color: Option<usize>,
 }
 
 pub const FBC_PARAMS: [ParamDef; 4] = [
-    ParamDef { id: "wbc", name: "WBC", unit: "×10⁹/L", limit: 10.0, ph: ["e.g. 7.2", "e.g. 7.5", "e.g. 7.4"], color: Some(0) },
-    ParamDef { id: "rbc", name: "RBC", unit: "×10¹²/L", limit: 4.0, ph: ["e.g. 4.20", "e.g. 4.15", "e.g. 4.18"], color: Some(1) },
-    ParamDef { id: "hgb", name: "HGB", unit: "g/dL", limit: 4.0, ph: ["e.g. 13.5", "e.g. 13.7", "e.g. 13.6"], color: Some(2) },
-    ParamDef { id: "plt", name: "PLT", unit: "×10⁹/L", limit: 25.0, ph: ["e.g. 250", "e.g. 262", "e.g. 256"], color: Some(3) },
+    ParamDef { id: "wbc", name: "WBC", unit: "×10⁹/L", limit: 10.0, color: Some(0) },
+    ParamDef { id: "rbc", name: "RBC", unit: "×10¹²/L", limit: 4.0, color: Some(1) },
+    ParamDef { id: "hgb", name: "HGB", unit: "g/dL", limit: 4.0, color: Some(2) },
+    ParamDef { id: "plt", name: "PLT", unit: "×10⁹/L", limit: 25.0, color: Some(3) },
 ];
 
 pub const PT_PARAMS: [ParamDef; 2] = [
-    ParamDef { id: "pt", name: "PT", unit: "seconds", limit: 5.0, ph: ["e.g. 12.4", "e.g. 12.6", "e.g. 12.5"], color: None },
-    ParamDef { id: "aptt", name: "APTT", unit: "seconds", limit: 5.0, ph: ["e.g. 31.2", "e.g. 31.8", "e.g. 31.5"], color: None },
+    ParamDef { id: "pt", name: "PT", unit: "seconds", limit: 5.0, color: None },
+    ParamDef { id: "aptt", name: "APTT", unit: "seconds", limit: 5.0, color: None },
 ];
 
-pub const DIL_PARAMS: [(&str, &str); 5] = [
-    ("WBC", "e.g. 6.28"),
-    ("RBC", "e.g. 3.69"),
-    ("HGB", "e.g. 6.45"),
-    ("HCT", "e.g. 21.4"),
-    ("PLT", "e.g. 127"),
-];
+pub const DIL_PARAMS: [&str; 5] = ["WBC", "RBC", "HGB", "HCT", "PLT"];
 
 pub struct Checker {
     pub key: &'static str,
@@ -388,16 +380,17 @@ impl eframe::App for App {
             #[allow(unused_mut)]
             let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]).drag_to_scroll(false);
             #[cfg(feature = "screenshot")]
-            {
+            if self.shot.path.is_some() {
+                // Only while rendering a screenshot: pinning the offset every
+                // frame otherwise stops the page from scrolling at all.
                 area = area.vertical_scroll_offset(self.shot.scroll);
             }
             area.show(ui, |ui| {
-                let origin = pos2(content_left, ui.cursor().min.y + 36.0);
+                let origin = pos2(content_left, ui.cursor().min.y + 12.0);
                 let bottom = match self.tab {
                     Tab::Fbc => self.checker_panel(ui, &th, origin, content_w, true),
                     Tab::PtAptt => self.checker_panel(ui, &th, origin, content_w, false),
                     Tab::Retic => self.retic_panel(ui, &th, origin, content_w),
-                    Tab::Dilution => self.dilution_panel(ui, &th, origin, content_w),
                 };
                 let top = ui.cursor().min;
                 ui.allocate_rect(Rect::from_min_max(top, pos2(ui.max_rect().right(), bottom + 60.0)), Sense::hover());
@@ -841,7 +834,6 @@ impl App {
                     self.tab = match v {
                         "retic" => Tab::Retic,
                         "pt" => Tab::PtAptt,
-                        "dil" => Tab::Dilution,
                         _ => Tab::Fbc,
                     }
                 }

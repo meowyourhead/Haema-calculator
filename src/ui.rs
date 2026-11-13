@@ -223,30 +223,6 @@ pub fn diamond(p: &Painter, c: Pos2, half: f32, fill_c: Color32, stroke: Stroke)
     ));
 }
 
-/// Four-pointed star (the Genshin row sparkle).
-pub fn star(p: &Painter, c: Pos2, size: f32, color: Color32) {
-    let s = size / 24.0;
-    let o = |x: f32, y: f32| pos2(c.x + (x - 12.0) * s, c.y + (y - 12.0) * s);
-    let mut m = Mesh::default();
-    let pts = [
-        o(12.0, 0.0), o(14.6, 9.4), o(9.4, 9.4), // top
-        o(24.0, 12.0), o(14.6, 14.6), o(14.6, 9.4), // right
-        o(12.0, 24.0), o(9.4, 14.6), o(14.6, 14.6), // bottom
-        o(0.0, 12.0), o(9.4, 9.4), o(9.4, 14.6), // left
-        o(9.4, 9.4), o(14.6, 9.4), o(14.6, 14.6), o(9.4, 14.6), // centre
-    ];
-    for (i, q) in pts.iter().enumerate() {
-        let _ = i;
-        m.colored_vertex(*q, color);
-    }
-    for t in 0..4 {
-        m.add_triangle(t * 3, t * 3 + 1, t * 3 + 2);
-    }
-    m.add_triangle(12, 13, 14);
-    m.add_triangle(12, 14, 15);
-    p.add(Shape::mesh(m));
-}
-
 /// Horizontal gradient strip (the feathered tail of a Genshin settings row).
 pub fn h_gradient(p: &Painter, rect: Rect, left: Color32, right: Color32) {
     let mut m = Mesh::default();
@@ -771,7 +747,9 @@ pub fn field_s(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, 
         pad_r = 14.0;
     }
 
-    let pad = if gen { 18.0 } else { 11.0 };
+    // Genshin capsules keep the text clear of their round ends; shorter
+    // capsules have tighter ends, so the inset scales with height.
+    let pad = if gen { (rect.height() * 0.45).min(18.0) } else { 11.0 };
     let inner = Rect::from_min_max(rect.min + vec2(pad, 1.0), rect.max - vec2(pad + pad_r, 1.0));
     let mut child = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Center)));
     let font = th.font(Role::Mono, 14.72);
@@ -969,9 +947,13 @@ pub struct CardOpts<'a> {
     pub min_height: f32,
     /// A comparison in this card failed: flag-coloured edge and a "Review" tag.
     pub alert: bool,
+    /// Headline status shown right after the title (replaces the "Review" tag).
+    pub status: Option<(crate::logic::Status, &'a str)>,
 }
 
-pub const HEAD_H: f32 = 57.0;
+pub const HEAD_H: f32 = 48.0;
+/// Space between the header divider / card edge and the body.
+pub const CARD_PAD: f32 = 16.0;
 
 pub fn card_shadow(p: &Painter, th: &Theme, rect: Rect, r: f32) -> Shape {
     if th.palette == Palette::Pokemon {
@@ -1016,25 +998,25 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
     // small data-chip tag in front of a red heading.
     let bl = if o.bar.is_some() && !gen && !cyber { 4.0 } else { 1.0 };
     let head_y = min.y;
+    let mid_y = head_y + HEAD_H / 2.0;
     let title_c = if cyber { th.accent } else { o.title_color.unwrap_or(th.text) };
     // header text
     let mut tx = min.x + bl + 20.0;
     if cyber {
         if let Some(b) = o.bar {
-            cyber_chip(&ui.painter(), pos2(tx + 5.0, head_y + 30.0), 11.0, b, b, rgba(th.surface, 0.85));
+            cyber_chip(&ui.painter(), pos2(tx + 5.0, mid_y), 11.0, b, b, rgba(th.surface, 0.85));
             tx += 18.0;
         }
     }
     if gen {
         if let Some(b) = o.bar {
-            let gc = pos2(tx + 6.0, head_y + 30.0);
+            let gc = pos2(tx + 6.0, mid_y);
             diamond(&ui.painter(), gc, 7.5, th.gold, Stroke::NONE);
             diamond(&ui.painter(), gc, 5.5, b, Stroke::NONE);
             diamond(&ui.painter(), gc + vec2(-1.2, -1.6), 1.6, rgba(Color32::WHITE, 0.70), Stroke::NONE);
             tx += 20.0;
         }
     }
-    let mid_y = head_y + 18.0 + 12.0;
     let title = if cyber { o.title.to_uppercase() } else { o.title.to_string() };
     let title_ls = match th.palette {
         Palette::Genshin => -0.02,
@@ -1043,9 +1025,13 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
         Palette::Default => -0.01,
     };
     let t_rect = text_ls(ui, th, pos2(tx, mid_y), Align2::LEFT_CENTER, &title, Role::Display, if cyber { 15.5 } else { 16.0 }, title_c, title_ls);
+    let mut head_right = t_rect.right();
     if !o.unit.is_empty() {
         let unit_role = if cyber { Role::Mono } else { Role::Sans };
-        text(ui, th, pos2(t_rect.right() + 8.0, mid_y + 1.5), Align2::LEFT_CENTER, o.unit, unit_role, 11.84, th.muted);
+        head_right = text(ui, th, pos2(t_rect.right() + 8.0, mid_y + 1.5), Align2::LEFT_CENTER, o.unit, unit_role, 11.84, th.muted).right();
+    }
+    if let Some((s, msg)) = o.status {
+        status_pill(ui, th, pos2(head_right + 14.0, mid_y), Align2::LEFT_CENTER, msg, s, 28.0, 13.0);
     }
     let mut chip_left = min.x + width - 1.0 - 20.0;
     if let Some((s, big)) = &o.chip {
@@ -1068,17 +1054,17 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
         };
         chip_left = chip_r.left();
     }
-    if o.alert {
+    if o.alert && o.status.is_none() {
         status_pill(ui, th, pos2(chip_left - 8.0, mid_y), Align2::RIGHT_CENTER, "Review", crate::logic::Status::Bad, 26.0, 12.0);
     }
 
     // body
     let inner_w = width - bl - 1.0 - 40.0;
-    let body_rect = Rect::from_min_size(pos2(min.x + bl + 20.0, head_y + HEAD_H + 20.0), vec2(inner_w, 10_000.0));
+    let body_rect = Rect::from_min_size(pos2(min.x + bl + 20.0, head_y + HEAD_H + CARD_PAD), vec2(inner_w, 10_000.0));
     let mut child = ui.new_child(UiBuilder::new().max_rect(body_rect).layout(Layout::top_down(Align::Min)));
     body(&mut child, inner_w);
     let used_bottom = child.min_rect().bottom().max(body_rect.top());
-    let h = (used_bottom + 20.0 + 1.0 - min.y).max(o.min_height);
+    let h = (used_bottom + CARD_PAD + 1.0 - min.y).max(o.min_height);
     let rect = Rect::from_min_size(min, vec2(width, h));
     crate::pikachu::perch(ui, Id::new(("pika-card", o.title, width as i32)), rect, crate::pikachu::PerchKind::Top, false);
 

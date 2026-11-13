@@ -1,6 +1,6 @@
 //! Frameless window chrome: a Chromium-style tab strip that doubles as the title bar.
 //!
-//! The strip hosts the four page tabs (FBC, Retic, PT / APTT, Dilution), a drag area and the
+//! The strip hosts the three page tabs (FBC with dilution, Retic, PT / APTT), a drag area and the
 //! minimize / maximize / close buttons. Thin invisible bands along the window edges start a
 //! native resize via `ViewportCommand::BeginResize`.
 use crate::app::{App, Tab};
@@ -22,11 +22,10 @@ const CLOSE_W: f32 = 62.0;
 const EDGE: f32 = 4.0;
 const CORNER: f32 = 10.0;
 
-const TABS: [(Tab, &str); 4] = [
+const TABS: [(Tab, &str); 3] = [
     (Tab::Fbc, "FBC"),
     (Tab::Retic, "Retic"),
     (Tab::PtAptt, "PT / APTT"),
-    (Tab::Dilution, "Dilution"),
 ];
 
 /// Draw the title bar. Must be called before the central panel.

@@ -1,4 +1,4 @@
-//! The four tool panels: FBC / PT-APTT checkers, Reticulocyte and Dilution.
+//! The tool panels: FBC (with dilution) / PT-APTT run sheets and Reticulocyte.
 use crate::app::*;
 use crate::logic::*;
 use crate::theme::{hex, rgba, Palette, Role, Theme};
@@ -101,94 +101,245 @@ fn overall_message(ck: &Checker, evals: &[ParamEval]) -> (Status, String) {
     (Status::Pending, format!("Waiting for {}", join_and(&waiting)))
 }
 
-/// A Genshin settings row (Settings / Key Bindings): a soft bar holding the
-/// label, and a brighter value cell on the right whose left edge feathers in
-/// behind a faint sparkle.
-fn genshin_row_overlay(p: &egui::Painter, th: &Theme, rect: Rect, row_w: f32) {
-    let r = 5.0;
-    let (base, cell, sparkle) = if th.dark {
-        (hex(0x384053), hex(0x4a5368), rgba(th.gold, 0.55))
-    } else {
-        (crate::theme::mix(0.07, hex(0x4a5366), th.surface), hex(0xf8f4ec), rgba(th.gold, 0.60))
-    };
-    fill(p, rect, r, base);
-    let sw = (row_w * 0.34).clamp(150.0, 210.0);
-    let feather = 46.0;
-    let seg = Rect::from_min_max(pos2(rect.right() - sw, rect.top()), rect.max);
-    p.with_clip_rect(seg).rect_filled(rect, cr(r), cell);
-    let fr = Rect::from_min_max(pos2(seg.left() - feather, rect.top()), pos2(seg.left(), rect.bottom()));
-    h_gradient(p, fr, Color32::TRANSPARENT, cell);
-    star(p, pos2(seg.left() - 8.0, rect.center().y), 13.0, sparkle);
+// --- Run sheet geometry -----------------------------------------------------
+// One row per parameter: name, limit, the runs (narrow: values are at most
+// five characters) and the comparisons, all on one line.
+
+const ROW_H: f32 = 46.0;
+const CELL_H: f32 = 32.0;
+const RUN_W: f32 = 84.0;
+const RUN_GAP: f32 = 10.0;
+const COL_GAP: f32 = 22.0;
+const HEAD_ROW: f32 = 26.0;
+/// Extra height of a row whose comparisons wrap under the runs.
+const STACK_H: f32 = 26.0;
+/// Card chrome around the body: 1 px edge, 20 px padding, each side.
+const CARD_CHROME: f32 = 42.0;
+
+/// Left inset of the text inside a `CELL_H` field, so headings and computed
+/// values line up with the typed digits.
+fn cell_inset(th: &Theme) -> f32 {
+    if th.palette == Palette::Genshin { (CELL_H * 0.45).min(18.0) } else { 11.0 }
 }
 
-fn result_row(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, label: &str, res: &PairResult) {
-    let h = 41.0;
-    let p = ui.painter().clone();
-    match th.palette {
-        Palette::Default => {
-            p.line_segment([pos2(pos.x, pos.y + 0.5), pos2(pos.x + w, pos.y + 0.5)], Stroke::new(1.0, th.line));
-        }
-        Palette::Pokemon => {
-            let r = Rect::from_min_size(pos2(pos.x - 14.0, pos.y + 3.0), vec2(w + 28.0, h - 6.0));
-            fill(&p, r, 12.0, th.field);
-            stroke_in(&p, r, 12.0, 1.5, rgba(th.ring, 0.35));
-        }
-        Palette::Genshin => genshin_row_overlay(&p, th, Rect::from_min_size(pos2(pos.x - 14.0, pos.y + 3.0), vec2(w + 28.0, h - 6.0)), w),
-        Palette::Cyberpunk => {
-            let r = Rect::from_min_size(pos2(pos.x - 14.0, pos.y + 3.0), vec2(w + 28.0, h - 6.0));
-            cyber_panel(&p, r, 4.0, rgba(th.surface2, if th.dark { 0.72 } else { 0.55 }), 1.0, rgba(th.accent, 0.26));
-            let sc = status_colors(th, res.status);
-            p.rect_filled(Rect::from_min_size(r.min, vec2(2.0, r.height())), 0.0, rgba(sc, 0.85));
-        }
+/// A small column heading: sentence case, quiet.
+fn col_head(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, s: &str, color: Color32) -> Rect {
+    if th.palette == Palette::Cyberpunk {
+        text_ls(ui, th, pos, anchor, &s.to_uppercase(), Role::SansB, 11.0, color, 0.08)
+    } else {
+        text(ui, th, pos, anchor, s, Role::SansB, 12.0, color)
     }
-    let mid = pos.y + 1.0 + (h - 1.0) / 2.0;
-    text(ui, th, pos2(pos.x + 1.0, mid), Align2::LEFT_CENTER, label, Role::Sans, 12.8, th.muted);
-    let bw = badge(ui, th, pos2(pos.x + w - 1.0, mid), res.badge, res.status);
+}
+
+/// Width `badge` will take for this label.
+fn badge_width(ui: &Ui, th: &Theme, s: &str) -> f32 {
+    if th.palette == Palette::Cyberpunk {
+        galley(ui, th, &s.to_uppercase(), Role::SansB, 12.0, th.text, 0.05, f32::INFINITY).size().x + 26.0
+    } else {
+        text_width(ui, th, s, Role::SansB, 12.0) + 17.0
+    }
+}
+
+/// Hairline between sheet rows, in the palette's own rule colour.
+fn sheet_rule(th: &Theme) -> Color32 {
+    match th.palette {
+        Palette::Genshin => rgba(th.gold, 0.32),
+        Palette::Cyberpunk => rgba(th.accent, 0.22),
+        _ => th.line,
+    }
+}
+
+struct Sheet {
+    limit_x: f32,
+    runs_x: f32,
+    cmp_x: f32,
+    pct_w: f32,
+    cmp_w: f32,
+    /// Natural inner width with everything on one line.
+    inner: f32,
+}
+
+fn sheet_layout(ui: &Ui, th: &Theme, params: &[ParamDef], third: bool) -> Sheet {
+    let name_w = params
+        .iter()
+        .map(|p| text_width(ui, th, p.name, Role::SansB, 15.0) + 6.0 + text_width(ui, th, p.unit, Role::Sans, 11.5))
+        .fold(96.0, f32::max)
+        .ceil();
+    let limit_w = text_width(ui, th, "≤ 25%", Role::Mono, 13.0).ceil();
+    let n = if third { 3.0 } else { 2.0 };
+    let m = run_pairs(third).len() as f32;
+    let pct_w = text_width(ui, th, "100.00%", Role::MonoB, 14.0).ceil();
+    let cmp_w = pct_w + 10.0 + badge_width(ui, th, "Acceptable").max(badge_width(ui, th, "Check value")).ceil();
+    let limit_x = name_w + COL_GAP;
+    let runs_x = limit_x + limit_w + COL_GAP;
+    let cmp_x = runs_x + n * RUN_W + (n - 1.0) * RUN_GAP + COL_GAP;
+    let inner = cmp_x + m * cmp_w + (m - 1.0) * COL_GAP;
+    Sheet { limit_x, runs_x, cmp_x, pct_w, cmp_w, inner }
+}
+
+/// One comparison: the difference, then a glyph + word verdict. Pending
+/// comparisons show only a dash, so empty rows stay quiet.
+/// `words: false` keeps only the glyph (narrow windows). Returns the right edge.
+fn comparison(ui: &Ui, th: &Theme, x: f32, mid: f32, pct_w: f32, res: &PairResult, words: bool) -> f32 {
+    if res.status == Status::Pending {
+        text(ui, th, pos2(x + pct_w, mid), Align2::RIGHT_CENTER, "—", Role::MonoB, 14.0, th.line_strong);
+        return x + pct_w;
+    }
     let pc = if res.status == Status::Bad { status_colors(th, res.status) } else { th.text };
-    text(ui, th, pos2(pos.x + w - 1.0 - bw - 12.0, mid), Align2::RIGHT_CENTER, &res.percent, Role::MonoB, 14.4, pc);
+    text(ui, th, pos2(x + pct_w, mid), Align2::RIGHT_CENTER, &res.percent, Role::MonoB, 14.0, pc);
+    if words {
+        let bw = badge_width(ui, th, res.badge);
+        badge(ui, th, pos2(x + pct_w + 10.0 + bw, mid), res.badge, res.status);
+        x + pct_w + 10.0 + bw
+    } else {
+        status_glyph(ui.painter(), pos2(x + pct_w + 14.0, mid), 6.0, res.status, status_colors(th, res.status));
+        x + pct_w + 20.0
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn checker_body(ui: &mut Ui, th: &Theme, iw: f32, key: &str, p: &ParamDef, vals: &mut [String; 3], third: bool, flagged_runs: [bool; 3]) {
+fn sheet_body(ui: &mut Ui, th: &Theme, iw: f32, sh: &Sheet, key: &str, params: &[ParamDef], vals: &mut [[String; 3]], third: bool, evals: &[ParamEval]) {
     let o = ui.cursor().min;
     let n = if third { 3 } else { 2 };
-    let gap = 12.0;
-    let colw = (iw - gap * (n as f32 - 1.0)) / n as f32;
+    let pairs = run_pairs(third);
+    // Too narrow for one line: the comparisons wrap under the runs, each
+    // carrying its own "1 vs 2" caption since the column headings are gone.
+    let stacked = sh.inner > iw + 0.5;
+    let inset = cell_inset(th);
+    let rule = Stroke::new(1.0_f32, sheet_rule(th));
+
+    // column headings
+    let hm = o.y + HEAD_ROW / 2.0 - 4.0;
+    col_head(ui, th, pos2(o.x + sh.limit_x, hm), Align2::LEFT_CENTER, "Limit", th.muted);
     for k in 0..n {
-        let pos = o + vec2(k as f32 * (colw + gap), 0.0);
-        let state = if parse_positive(&vals[k]) == Num::Invalid {
-            FieldState::Invalid
-        } else if flagged_runs[k] {
-            FieldState::Flagged
-        } else {
-            FieldState::Normal
-        };
-        labeled_field_s(ui, th, pos, colw, &format!("Run {}", k + 1), Id::new((key, p.id, k)), &mut vals[k], p.ph[k], state);
+        let x = o.x + sh.runs_x + k as f32 * (RUN_W + RUN_GAP);
+        col_head(ui, th, pos2(x + inset, hm), Align2::LEFT_CENTER, &format!("Run {}", k + 1), th.muted);
     }
-    let mut y = o.y + 60.0 + 18.0;
-    for (a, b) in run_pairs(third) {
-        let res = pair_result(parse_positive(&vals[*a]), parse_positive(&vals[*b]), p.limit);
-        result_row(ui, th, pos2(o.x, y), iw, &format!("Run {} vs Run {}", a + 1, b + 1), &res);
-        y += 41.0;
+    if !stacked {
+        for (j, (a, b)) in pairs.iter().enumerate() {
+            let x = o.x + sh.cmp_x + j as f32 * (sh.cmp_w + COL_GAP);
+            col_head(ui, th, pos2(x + sh.pct_w, hm), Align2::RIGHT_CENTER, &format!("Run {} vs {}", a + 1, b + 1), th.muted);
+        }
+    }
+    let mut y = o.y + HEAD_ROW;
+    ui.painter().line_segment([pos2(o.x, y - 0.5), pos2(o.x + iw, y - 0.5)], rule);
+
+    for (i, p) in params.iter().enumerate() {
+        let row_h = if stacked { ROW_H + STACK_H } else { ROW_H };
+        let row = Rect::from_min_max(pos2(o.x - 12.0, y), pos2(o.x + iw + 12.0, y + row_h));
+        let flagged = evals[i].status == Status::Bad;
+        if flagged {
+            // The one loud thing on the page: a flagged row is washed in the
+            // flag colour with a solid edge, so it is found without reading.
+            let pnt = ui.painter();
+            let r = Rect::from_min_max(row.min + vec2(0.0, 1.0), row.max - vec2(0.0, 1.0));
+            if th.palette == Palette::Cyberpunk {
+                cyber_fill(pnt, r, 4.0, th.bad_bg);
+            } else {
+                fill(pnt, r, 6.0, th.bad_bg);
+            }
+            pnt.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, th.bad);
+        }
+        let mid = y + ROW_H / 2.0;
+
+        // name + unit
+        let name_c = match p.color {
+            Some(k) => th.param[k].0,
+            None => th.text,
+        };
+        let nr = text(ui, th, pos2(o.x, mid), Align2::LEFT_CENTER, p.name, Role::SansB, 15.0, name_c);
+        text(ui, th, pos2(nr.right() + 6.0, mid + 1.0), Align2::LEFT_CENTER, p.unit, Role::Sans, 11.5, th.muted);
+        // limit
+        text(ui, th, pos2(o.x + sh.limit_x, mid), Align2::LEFT_CENTER, &format!("≤ {}%", fmt_js(p.limit)), Role::Mono, 13.0, th.muted);
+
+        // runs
+        for k in 0..n {
+            let x = o.x + sh.runs_x + k as f32 * (RUN_W + RUN_GAP);
+            let state = if parse_positive(&vals[i][k]) == Num::Invalid {
+                FieldState::Invalid
+            } else if evals[i].flagged_runs[k] {
+                FieldState::Flagged
+            } else {
+                FieldState::Normal
+            };
+            let r = Rect::from_min_size(pos2(x, mid - CELL_H / 2.0), vec2(RUN_W, CELL_H));
+            field_s(ui, th, r, Id::new((key, p.id, k)), &mut vals[i][k], "", state);
+        }
+
+        // comparisons
+        let mut sx = o.x + sh.limit_x;
+        for (j, (a, b)) in pairs.iter().enumerate() {
+            let res = pair_result(parse_positive(&vals[i][*a]), parse_positive(&vals[i][*b]), p.limit);
+            if stacked {
+                let cm = y + ROW_H + STACK_H / 2.0 - 6.0;
+                let cap = col_head(ui, th, pos2(sx, cm), Align2::LEFT_CENTER, &format!("{} vs {}", a + 1, b + 1), th.muted);
+                // Left-aligned after its caption, so the gap never varies.
+                let shown = if res.status == Status::Pending { "—" } else { res.percent.as_str() };
+                let tw = text_width(ui, th, shown, Role::MonoB, 14.0);
+                sx = comparison(ui, th, cap.right() + 6.0 + tw - sh.pct_w, cm, sh.pct_w, &res, false) + 22.0;
+            } else {
+                let x = o.x + sh.cmp_x + j as f32 * (sh.cmp_w + COL_GAP);
+                comparison(ui, th, x, mid, sh.pct_w, &res, true);
+            }
+        }
+
+        y += row_h;
+        if i + 1 < params.len() && !flagged && evals[i + 1].status != Status::Bad {
+            ui.painter().line_segment([pos2(o.x, y - 0.5), pos2(o.x + iw, y - 0.5)], rule);
+        }
     }
     ui.allocate_rect(Rect::from_min_max(o, pos2(o.x + iw, y)), Sense::hover());
 }
 
+/// Small buttons placed in a card's header, right-aligned.
+fn header_buttons(ui: &mut Ui, card: Rect, f: impl FnOnce(&mut Ui)) {
+    let r = Rect::from_min_max(pos2(card.left() + 20.0, card.top() + (HEAD_H - 32.0) / 2.0), pos2(card.right() - 20.0, card.top() + (HEAD_H + 32.0) / 2.0));
+    let mut child = ui.new_child(UiBuilder::new().max_rect(r).layout(Layout::right_to_left(Align::Center)));
+    child.spacing_mut().item_spacing.x = 8.0;
+    f(&mut child);
+}
+
 impl App {
+    /// FBC (with the dilution sheet underneath) or PT / APTT.
     pub fn checker_panel(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32, is_fbc: bool) -> f32 {
         let ck = if is_fbc { &mut self.fbc } else { &mut self.pt };
         let key = ck.key;
         let params = ck.params;
-        let mut y = origin.y;
+        let third = ck.third;
+
+        // Both sheets share one width: the wider of the two at their natural
+        // size, centred, so the page reads as one compact column.
+        let sh = sheet_layout(ui, th, params, third);
+        let mut cw = sh.inner + CARD_CHROME;
+        if is_fbc {
+            cw = cw.max(dilution_natural(ui, th) + CARD_CHROME);
+        }
+        let cw = cw.min(w).floor();
+        let x0 = origin.x + ((w - cw) / 2.0).floor();
+
+        let evals: Vec<ParamEval> = params.iter().zip(&ck.vals).map(|(p, v)| eval_param(p, v, third)).collect();
+        let (st, msg) = overall_message(ck, &evals);
+        let opts = CardOpts {
+            title: if is_fbc { "FBC" } else { "PT / APTT" },
+            unit: "",
+            bar: None,
+            head_bg: None,
+            title_color: None,
+            chip: None,
+            min_height: 0.0,
+            alert: st == Status::Bad,
+            status: Some((st, &msg)),
+        };
+        let vals = &mut ck.vals;
+        let rect = card(ui, th, pos2(x0, origin.y), cw, &opts, |ui, iw| sheet_body(ui, th, iw, &sh, key, params, vals, third, &evals));
 
         let (mut clear, mut toggle) = (false, false);
-        let third_now = ck.third;
-        y = toolbar(ui, pos2(origin.x, y), w, |ui| {
-            if button(ui, th, "Clear", Btn::Secondary, true).clicked() {
+        header_buttons(ui, rect, |ui| {
+            if button(ui, th, "Clear", Btn::MiniMuted, true).clicked() {
                 clear = true;
             }
-            let label = if third_now { "− Remove third run" } else { "+ Add third run" };
-            if button(ui, th, label, Btn::Primary, true).clicked() {
+            let label = if third { "− Run 3" } else { "+ Run 3" };
+            if button(ui, th, label, Btn::Mini, true).clicked() {
                 toggle = true;
             }
         });
@@ -209,45 +360,11 @@ impl App {
             ui.memory_mut(|m| m.request_focus(Id::new((key, params[0].id, 0usize))));
         }
 
-        // Verdicts first, so the headline sits above the cards it summarises.
-        let third = ck.third;
-        let evals: Vec<ParamEval> = params.iter().zip(&ck.vals).map(|(p, v)| eval_param(p, v, third)).collect();
-        let (st, msg) = overall_message(ck, &evals);
-        status_pill(ui, th, pos2(origin.x, origin.y + 18.0), Align2::LEFT_CENTER, &msg, st, 36.0, 14.0);
-
-        let cols = if w >= 640.0 { 2 } else { 1 };
-        let cw = (w - 16.0 * (cols as f32 - 1.0)) / cols as f32;
-        let n = params.len();
-        let mut idx = 0;
-        while idx < n {
-            let end = (idx + cols).min(n);
-            let mut row_bottom = y;
-            for (c, i) in (idx..end).enumerate() {
-                let pd = &params[i];
-                let x = origin.x + c as f32 * (cw + 16.0);
-                let (bar, head_bg, title_c) = match pd.color {
-                    Some(k) => (Some(th.param[k].0), Some(th.param[k].1), Some(th.param[k].0)),
-                    None => (None, None, None),
-                };
-                let opts = CardOpts {
-                    title: pd.name,
-                    unit: pd.unit,
-                    bar,
-                    head_bg,
-                    title_color: title_c,
-                    chip: Some((format!("≤ {}%", fmt_js(pd.limit)), is_fbc)),
-                    min_height: 0.0,
-                    alert: evals[i].status == Status::Bad,
-                };
-                let vals = &mut ck.vals[i];
-                let flagged_runs = evals[i].flagged_runs;
-                let rect = card(ui, th, pos2(x, y), cw, &opts, |ui, iw| checker_body(ui, th, iw, key, pd, vals, third, flagged_runs));
-                row_bottom = row_bottom.max(rect.bottom());
-            }
-            y = row_bottom + 16.0;
-            idx = end;
+        if is_fbc {
+            self.dilution_card(ui, th, pos2(x0, rect.bottom() + 16.0), cw)
+        } else {
+            rect.bottom()
         }
-        y - 16.0
     }
 }
 
@@ -514,10 +631,10 @@ impl App {
             helper_pos = pos2(origin.x, y); // fixed below
         }
 
-        let main_opts = CardOpts { title: "Reticulocyte", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: min_h, alert: false };
+        let main_opts = CardOpts { title: "Reticulocyte", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: min_h, alert: false, status: None };
         let main_rect = card(ui, th, main_pos, main_w, &main_opts, |ui, iw| self.retic_main_body(ui, th, iw, &out));
         let helper_pos = if two_col { helper_pos } else { pos2(origin.x, main_rect.bottom() + gap) };
-        let helper_opts = CardOpts { title: "Counting helper", unit: "retics / 1000 RBCs", bar: None, head_bg: None, title_color: None, chip: None, min_height: min_h, alert: false };
+        let helper_opts = CardOpts { title: "Counting helper", unit: "retics / 1000 RBCs", bar: None, head_bg: None, title_color: None, chip: None, min_height: min_h, alert: false, status: None };
         let helper_rect = card(ui, th, helper_pos, helper_w, &helper_opts, |ui, iw| self.helper_body(ui, th, iw));
         let row_h = main_rect.height().max(helper_rect.height());
         if two_col {
@@ -710,7 +827,7 @@ impl App {
 
     fn calc_card(&mut self, ui: &mut Ui, th: &Theme, pos: Pos2, w: f32) -> f32 {
         let steps = self.build_steps();
-        let opts = CardOpts { title: "Calculations", unit: "updates as you type", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false };
+        let opts = CardOpts { title: "Calculations", unit: "updates as you type", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false, status: None };
         let rect = card(ui, th, pos, w, &opts, |ui, iw| {
             let o = ui.cursor().min;
             // Steps wrap into a 4×1, 2×2 or 1×4 grid by the width available;
@@ -980,61 +1097,93 @@ fn draw_step(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, s: &Step, min_h: f32) -
 }
 
 // ---------------------------------------------------------------------------
-// Dilution
+// Dilution (drawn under the FBC sheet)
 // ---------------------------------------------------------------------------
 
+const DIL_W: f32 = 84.0;
+const DIL_MIN_W: f32 = 62.0;
+const DIL_GAP: f32 = 12.0;
+const DIL_ROWS: [&str; 2] = ["1:2 diluted", "Neat (×2)"];
+
+fn dil_label_w(ui: &Ui, th: &Theme) -> f32 {
+    DIL_ROWS.iter().map(|s| text_width(ui, th, s, Role::Sans, 13.0)).fold(0.0, f32::max).ceil()
+}
+
+/// Inner width of the dilution sheet at full column width.
+pub fn dilution_natural(ui: &Ui, th: &Theme) -> f32 {
+    let n = DIL_PARAMS.len() as f32;
+    dil_label_w(ui, th) + COL_GAP + n * DIL_W + (n - 1.0) * DIL_GAP
+}
+
+/// The FBC colour for a dilution parameter, so the two sheets read as one.
+fn dil_color(th: &Theme, name: &str) -> Color32 {
+    FBC_PARAMS.iter().find(|p| p.name == name).and_then(|p| p.color).map(|k| th.param[k].0).unwrap_or(th.text)
+}
+
 impl App {
-    pub fn dilution_panel(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
-        let mut reset = false;
-        let y = toolbar(ui, origin, w, |ui| {
-            if button(ui, th, "Reset", Btn::Secondary, true).clicked() {
-                reset = true;
+    pub fn dilution_card(&mut self, ui: &mut Ui, th: &Theme, pos: Pos2, w: f32) -> f32 {
+        let opts = CardOpts { title: "Dilution", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false, status: None };
+        let rect = card(ui, th, pos, w, &opts, |ui, iw| {
+            let o = ui.cursor().min;
+            let lw = dil_label_w(ui, th);
+            let n = DIL_PARAMS.len() as f32;
+            let colw = ((iw - lw - COL_GAP - (n - 1.0) * DIL_GAP) / n).clamp(DIL_MIN_W, DIL_W);
+            let inset = cell_inset(th);
+            let rule = Stroke::new(1.0_f32, sheet_rule(th));
+            let xc = |i: usize| o.x + lw + COL_GAP + i as f32 * (colw + DIL_GAP);
+
+            // parameter headings, coloured like their FBC rows
+            let hm = o.y + HEAD_ROW / 2.0 - 4.0;
+            for (i, name) in DIL_PARAMS.iter().enumerate() {
+                text(ui, th, pos2(xc(i) + inset, hm), Align2::LEFT_CENTER, name, Role::SansB, 13.5, dil_color(th, name));
+            }
+            let mut y = o.y + HEAD_ROW;
+            ui.painter().line_segment([pos2(o.x, y - 0.5), pos2(o.x + iw, y - 0.5)], rule);
+
+            // diluted entries
+            let mid = y + ROW_H / 2.0;
+            text(ui, th, pos2(o.x, mid), Align2::LEFT_CENTER, DIL_ROWS[0], Role::Sans, 13.0, th.muted);
+            for i in 0..DIL_PARAMS.len() {
+                let r = Rect::from_min_size(pos2(xc(i), mid - CELL_H / 2.0), vec2(colw, CELL_H));
+                let invalid = parse_number(&self.dil[i]) == Num::Invalid;
+                field(ui, th, r, Id::new(("dil", i)), &mut self.dil[i], "", invalid);
+            }
+            y += ROW_H;
+            ui.painter().line_segment([pos2(o.x, y - 0.5), pos2(o.x + iw, y - 0.5)], rule);
+
+            // calculated neat: results, so plain ink; only an unusable entry is red
+            let mid = y + 38.0 / 2.0;
+            text(ui, th, pos2(o.x, mid), Align2::LEFT_CENTER, DIL_ROWS[1], Role::Sans, 13.0, th.muted);
+            for i in 0..DIL_PARAMS.len() {
+                let p = pos2(xc(i) + inset, mid);
+                match parse_number(&self.dil[i]) {
+                    Num::Empty => {
+                        text(ui, th, p, Align2::LEFT_CENTER, "—", Role::MonoB, 15.0, th.line_strong);
+                    }
+                    Num::Invalid => {
+                        text(ui, th, p, Align2::LEFT_CENTER, "Check", Role::SansB, 12.5, th.bad);
+                    }
+                    Num::Val(v) => {
+                        text(ui, th, p, Align2::LEFT_CENTER, &fmt_js(v * 2.0), Role::MonoB, 15.0, th.text);
+                    }
+                }
+            }
+            y += 38.0 - 6.0;
+            ui.allocate_rect(Rect::from_min_max(o, pos2(o.x + iw, y)), Sense::hover());
+        });
+
+        let mut clear = false;
+        header_buttons(ui, rect, |ui| {
+            if button(ui, th, "Clear", Btn::MiniMuted, true).clicked() {
+                clear = true;
             }
         });
-        if reset {
+        if clear {
             for s in self.dil.iter_mut() {
                 s.clear();
             }
             ui.memory_mut(|m| m.request_focus(Id::new(("dil", 0usize))));
         }
-        let opts = CardOpts { title: "Dilution", unit: "1:2 diluted → calculated neat (×2)", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false };
-        let rect = card(ui, th, pos2(origin.x, y), w, &opts, |ui, iw| {
-            let o = ui.cursor().min;
-            let c1 = iw * 0.30;
-            let c2 = iw * 0.35;
-            let c3 = iw - c1 - c2;
-            let hy = o.y;
-            let th_txt = |ui: &Ui, x: f32, anchor: Align2, s: &str| {
-                text_ls(ui, th, pos2(x, hy), anchor, &s.to_uppercase(), Role::SansB, 10.88, th.muted, 0.03);
-            };
-            th_txt(ui, o.x + 8.0, Align2::LEFT_TOP, "Parameter");
-            th_txt(ui, o.x + c1 + c2 - 8.0, Align2::RIGHT_TOP, "1:2 Diluted");
-            th_txt(ui, o.x + iw - 8.0, Align2::RIGHT_TOP, "Calculated Neat");
-            let line_y = hy + LABEL_H + 10.0;
-            ui.painter().line_segment([pos2(o.x, line_y + 0.5), pos2(o.x + iw, line_y + 0.5)], Stroke::new(1.0, th.line));
-            let mut y = line_y + 1.0;
-            for (i, (name, hint)) in DIL_PARAMS.iter().enumerate() {
-                let rh = 10.0 + FIELD_H + 10.0 + 1.0;
-                let mid = y + 10.0 + FIELD_H / 2.0;
-                text(ui, th, pos2(o.x + 8.0, mid), Align2::LEFT_CENTER, name, Role::SansB, 16.0, th.text);
-                let fw = 130.0_f32.min(c2 - 16.0);
-                let fr = Rect::from_min_size(pos2(o.x + c1 + c2 - 8.0 - fw, y + 10.0), vec2(fw, FIELD_H));
-                let invalid = parse_number(&self.dil[i]) == Num::Invalid;
-                field(ui, th, fr, Id::new(("dil", i)), &mut self.dil[i], hint, invalid);
-                // Neat values are results, so plain ink; only an unusable entry is red.
-                let (out, oc) = match parse_number(&self.dil[i]) {
-                    Num::Empty => ("—".to_string(), th.muted),
-                    Num::Invalid => ("Check value".to_string(), th.bad),
-                    Num::Val(v) => (fmt_js(v * 2.0), th.text),
-                };
-                text(ui, th, pos2(o.x + c1 + c2 + c3 - 8.0, mid), Align2::RIGHT_CENTER, &out, Role::MonoB, 16.0, oc);
-                y += rh;
-                if i + 1 < DIL_PARAMS.len() {
-                    ui.painter().line_segment([pos2(o.x, y - 0.5), pos2(o.x + iw, y - 0.5)], Stroke::new(1.0, th.line));
-                }
-            }
-            ui.allocate_rect(Rect::from_min_max(o, pos2(o.x + iw, y - 1.0)), Sense::hover());
-        });
         rect.bottom()
     }
 }
