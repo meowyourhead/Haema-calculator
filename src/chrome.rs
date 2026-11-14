@@ -1,15 +1,14 @@
 //! Frameless window chrome: a Chromium-style tab strip that doubles as the title bar.
 //!
 //! The strip hosts the three page tabs (FBC with dilution, Retic, PT / APTT), a drag area and the
-//! minimize / maximize / close buttons. Thin invisible bands along the window edges start a
-//! native resize via `ViewportCommand::BeginResize`.
+//! minimize / maximize / close buttons. There is no edge resizing: the window keeps the Retic
+//! page's default size (see `App::fit_window`).
 use crate::app::{App, Tab};
 use crate::theme::{hex, rgba, Palette, Role, Theme};
 use crate::ui::*;
 use eframe::egui::epaint::StrokeKind;
 use eframe::egui::{
-    self, pos2, vec2, Align2, Color32, CornerRadius, Id, Rect, ResizeDirection, Response, Sense,
-    Stroke, Ui,
+    self, pos2, vec2, Align2, Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, Ui,
 };
 
 pub const CHROME_H: f32 = 44.0;
@@ -19,8 +18,6 @@ const TAB_GAP: f32 = 4.0;
 const TAB_FONT: f32 = 14.5;
 const BTN_W: f32 = 46.0;
 const CLOSE_W: f32 = 62.0;
-const EDGE: f32 = 4.0;
-const CORNER: f32 = 10.0;
 
 const TABS: [(Tab, &str); 3] = [
     (Tab::Fbc, "FBC"),
@@ -45,19 +42,33 @@ struct TabDraw {
     active: bool,
 }
 
+fn tab_widths(ui: &Ui, th: &Theme) -> Vec<f32> {
+    TABS.iter()
+        .map(|(_, label)| text_width(ui, th, label, Role::SansB, TAB_FONT).ceil() + TAB_PAD * 2.0)
+        .collect()
+}
+
+fn theme_btn_w(ui: &Ui, th: &Theme) -> f32 {
+    text_width(ui, th, "Theme", Role::SansB, 12.5).ceil() + 52.0
+}
+
+/// Narrowest window that still fits the tabs, the Theme button and the
+/// window buttons without overlap.
+pub fn min_width(ui: &Ui, th: &Theme) -> f32 {
+    let tabs = tab_widths(ui, th).iter().sum::<f32>() + TAB_GAP * (TABS.len() - 1) as f32;
+    // Tabs slide left of centre when space is short, so this is the tightest fit.
+    12.0 + tabs + 12.0 + CLOSE_W + BTN_W * 2.0 + theme_btn_w(ui, th) + 8.0
+}
+
 fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
     let rect = ui.max_rect();
-    let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
     let p = ui.painter().clone();
     let tab_top = rect.bottom() - TAB_H;
 
     // --- tabs (centred, with generous hit targets) -----------------------
-    let widths: Vec<f32> = TABS
-        .iter()
-        .map(|(_, label)| text_width(ui, th, label, Role::SansB, TAB_FONT).ceil() + TAB_PAD * 2.0)
-        .collect();
+    let widths = tab_widths(ui, th);
     let total_w = widths.iter().sum::<f32>() + TAB_GAP * (TABS.len() - 1) as f32;
-    let theme_w = text_width(ui, th, "Theme", Role::SansB, 12.5).ceil() + 52.0;
+    let theme_w = theme_btn_w(ui, th);
     let controls_left = rect.right() - (CLOSE_W + BTN_W * 2.0 + theme_w + 8.0);
     let min_x = rect.left() + 12.0;
     let max_x = (controls_left - total_w - 12.0).max(min_x);
@@ -88,6 +99,7 @@ fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
 
     // --- window buttons --------------------------------------------------
     let btn_top = rect.top();
+    let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
     let close = Rect::from_min_max(pos2(rect.right() - CLOSE_W, btn_top), pos2(rect.right(), btn_top + CHROME_H));
     let maximize = Rect::from_min_max(pos2(close.left() - BTN_W, btn_top), pos2(close.left(), btn_top + CHROME_H));
     let minimize = Rect::from_min_max(pos2(maximize.left() - BTN_W, btn_top), pos2(maximize.left(), btn_top + CHROME_H));
@@ -129,8 +141,6 @@ fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
         }
     }
-
-    resize_edges(ui, "top", true);
 }
 
 /// Genshin's notice-board header ("Game | Event"): text tabs on the dark
@@ -209,7 +219,7 @@ fn paint_tabs(ui: &Ui, th: &Theme, rect: Rect, p: &egui::Painter, draws: &[TabDr
             );
         } else {
             p.rect_filled(r, corners, fill);
-            let (rad, bw) = if th.palette == Palette::Pokemon { (14.0, 2.0) } else { (8.0, 1.0) };
+            let (rad, bw) = if th.palette == Palette::Pokemon { (14.0, 2.0) } else { (8.0, 1.0_f32) };
             p.add(tab_outline(r, rad, Stroke::new(bw, tab_border(th))));
             match th.palette {
                 Palette::Genshin => {
@@ -390,55 +400,6 @@ fn theme_button(ui: &mut Ui, th: &Theme, rect: Rect, open: bool) -> Response {
     let d = if open { -2.0 } else { 2.0 };
     p.add(egui::Shape::line(vec![pos2(cx - 3.5, cy - d), pos2(cx, cy + d), pos2(cx + 3.5, cy - d)], Stroke::new(1.4_f32, fg)));
     resp.on_hover_text("Colour theme and dark mode")
-}
-
-// ---------------------------------------------------------------------------
-// Edge resizing (the window is frameless, so egui must start the OS resize)
-// ---------------------------------------------------------------------------
-
-fn resize_edges(ui: &mut Ui, tag: &'static str, top: bool) {
-    let ctx = ui.ctx().clone();
-    if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
-        return;
-    }
-    let w = ctx.screen_rect();
-    let (l, t, r, b) = (w.left(), w.top(), w.right(), w.bottom());
-    let parts: [(&'static str, Rect, ResizeDirection, egui::CursorIcon); 5] = if top {
-        [
-            ("n", Rect::from_min_max(pos2(l + CORNER, t), pos2(r - CORNER, t + EDGE)), ResizeDirection::North, egui::CursorIcon::ResizeVertical),
-            ("w", Rect::from_min_max(pos2(l, t + CORNER), pos2(l + EDGE, b - CORNER)), ResizeDirection::West, egui::CursorIcon::ResizeHorizontal),
-            ("e", Rect::from_min_max(pos2(r - EDGE, t + CORNER), pos2(r, b - CORNER)), ResizeDirection::East, egui::CursorIcon::ResizeHorizontal),
-            ("nw", Rect::from_min_max(pos2(l, t), pos2(l + CORNER, t + CORNER)), ResizeDirection::NorthWest, egui::CursorIcon::ResizeNwSe),
-            ("ne", Rect::from_min_max(pos2(r - CORNER, t), pos2(r, t + CORNER)), ResizeDirection::NorthEast, egui::CursorIcon::ResizeNeSw),
-        ]
-    } else {
-        [
-            ("s", Rect::from_min_max(pos2(l + CORNER, b - EDGE), pos2(r - CORNER, b)), ResizeDirection::South, egui::CursorIcon::ResizeVertical),
-            ("w", Rect::from_min_max(pos2(l, t + CORNER), pos2(l + EDGE, b - CORNER)), ResizeDirection::West, egui::CursorIcon::ResizeHorizontal),
-            ("e", Rect::from_min_max(pos2(r - EDGE, t + CORNER), pos2(r, b - CORNER)), ResizeDirection::East, egui::CursorIcon::ResizeHorizontal),
-            ("sw", Rect::from_min_max(pos2(l, b - CORNER), pos2(l + CORNER, b)), ResizeDirection::SouthWest, egui::CursorIcon::ResizeNeSw),
-            ("se", Rect::from_min_max(pos2(r - CORNER, b - CORNER), pos2(r, b)), ResizeDirection::SouthEast, egui::CursorIcon::ResizeNwSe),
-        ]
-    };
-    let clip = ui.clip_rect();
-    for (name, rect, dir, cursor) in parts {
-        let r = rect.intersect(clip);
-        if r.width() < 1.0 || r.height() < 1.0 {
-            continue;
-        }
-        let resp = ui.interact(r, Id::new(("win-resize", tag, name)), Sense::click_and_drag());
-        if resp.hovered() {
-            ctx.set_cursor_icon(cursor);
-            if ctx.input(|i| i.pointer.primary_pressed()) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
-            }
-        }
-    }
-}
-
-/// Called from the central panel, after its content, so edge bands win hit-testing.
-pub fn resize_frame(ui: &mut Ui) {
-    resize_edges(ui, "frame", false);
 }
 
 // ---------------------------------------------------------------------------

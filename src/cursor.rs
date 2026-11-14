@@ -177,6 +177,8 @@ mod imp {
             let Some((name, _)) = entry else { continue };
             let wide: Vec<u16> = dir.join(name).as_os_str().encode_wide().chain(Some(0)).collect();
             // Never destroyed: cursor handles live for the process lifetime.
+            // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the
+            // call; a failed load returns null (0), which `Cursors::get` handles.
             handles[i] = unsafe { LoadCursorFromFileW(wide.as_ptr()) } as isize;
         }
         Cursors { handles }
@@ -208,6 +210,9 @@ mod imp {
         let Ok(handle) = frame.window_handle() else { return };
         let RawWindowHandle::Win32(win) = handle.as_raw() else { return };
         let hwnd = win.hwnd.get() as Hwnd;
+        // SAFETY: `hwnd` is the live top-level window owned by this thread (we
+        // are inside its `update`), and `wndproc` is a `'static` fn with the
+        // WNDPROC ABI that forwards everything it does not handle to `previous`.
         let previous = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as *const () as usize as isize) };
         if previous != 0 {
             WINDOW.store(hwnd as isize, Relaxed);
@@ -224,6 +229,7 @@ mod imp {
                 let changed = ACTIVE_CURSOR.swap(handle, Relaxed) != handle || !ACTIVE.load(Relaxed);
                 ACTIVE.store(true, Relaxed);
                 if inside {
+                    // SAFETY: `handle` is a non-null cursor loaded above and never destroyed.
                     unsafe { SetCursor(handle as Hcursor) };
                 }
                 if changed {
@@ -231,6 +237,7 @@ mod imp {
                     // one more WM_SETCURSOR once the frame is painted.
                     let hwnd = WINDOW.load(Relaxed);
                     if hwnd != 0 {
+                        // SAFETY: posting to our own window; a stale handle just fails.
                         unsafe {
                             PostMessageW(hwnd as Hwnd, WM_SETCURSOR, hwnd as usize, HTCLIENT as isize);
                         }
@@ -243,6 +250,7 @@ mod imp {
             // Leaving the palette: put back the stock cursor winit would have set.
             let stock = stock_cursor(icon);
             if inside && !stock.is_null() {
+                // SAFETY: a shared system cursor, checked non-null.
                 unsafe { SetCursor(stock) };
             }
         }
@@ -284,6 +292,8 @@ mod imp {
             C::ResizeNeSw | C::ResizeNorthEast | C::ResizeSouthWest => IDC_SIZENESW,
             _ => IDC_ARROW,
         };
+        // SAFETY: a null instance plus a MAKEINTRESOURCE id selects a stock
+        // system cursor; nothing is dereferenced on our side.
         unsafe { LoadCursorW(core::ptr::null_mut(), id as *const u16) }
     }
 
@@ -292,15 +302,20 @@ mod imp {
         if msg == WM_SETCURSOR && ACTIVE.load(Relaxed) && ((lparam as u32) & 0xffff) == HTCLIENT {
             let handle = ACTIVE_CURSOR.load(Relaxed);
             if handle != 0 {
+                // SAFETY: `handle` is a loaded, never-destroyed cursor.
                 unsafe { SetCursor(handle as Hcursor) };
                 return 1;
             }
         }
         let previous = ORIGINAL_WNDPROC.load(Relaxed);
         if previous == 0 {
+            // SAFETY: forwarding the arguments Windows gave us, unchanged.
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         } else {
-            let proc: Wndproc = unsafe { std::mem::transmute(previous) };
+            // SAFETY: `previous` is the non-zero WNDPROC returned by
+            // `SetWindowLongPtrW`, so it is a valid `extern "system"` fn pointer
+            // (and `Option<fn>` has the same layout as a nullable pointer).
+            let proc: Wndproc = unsafe { std::mem::transmute::<isize, Wndproc>(previous) };
             unsafe { CallWindowProcW(proc, hwnd, msg, wparam, lparam) }
         }
     }

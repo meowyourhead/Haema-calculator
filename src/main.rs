@@ -23,7 +23,9 @@ fn fox_icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result<()> {
-    let mut size = [1180.0, 820.0];
+    // Only the first frame's size: after that the window fits the page.
+    #[cfg_attr(not(feature = "screenshot"), allow(unused_mut))]
+    let mut size = [780.0, 640.0];
     #[cfg(feature = "screenshot")]
     if let Ok(s) = std::env::var("HAEM_SIZE") {
         let v: Vec<f32> = s.split('x').filter_map(|p| p.parse().ok()).collect();
@@ -37,7 +39,8 @@ fn main() -> eframe::Result<()> {
             .with_decorations(false)
             .with_icon(fox_icon())
             .with_inner_size(size)
-            .with_min_inner_size([720.0, 520.0]),
+            .with_min_inner_size([400.0, 240.0])
+            .with_maximize_button(true),
         ..Default::default()
     };
     eframe::run_native(

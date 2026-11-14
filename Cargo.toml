@@ -25,6 +25,9 @@ ab_glyph = "0.2"
 
 [profile.release]
 opt-level = 3
-lto = "thin"
-codegen-units = 4
+# Whole-program optimisation: smaller, slightly faster exe (longer release builds).
+lto = "fat"
+codegen-units = 1
+# A GUI app has nothing to unwind into; aborting drops the unwind tables.
+panic = "abort"
 strip = true

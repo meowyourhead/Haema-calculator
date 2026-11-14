@@ -243,7 +243,7 @@ pub fn genshin_frame(p: &Painter, th: &Theme, rect: Rect, r: f32) {
     let inset = rect.shrink(4.0);
     stroke_in(p, inset, (r - 3.0).max(1.0), 1.0, rgba(gold, if th.dark { 0.34 } else { 0.55 }));
     let arm = 11.0;
-    let st = Stroke::new(1.5, gold);
+    let st = Stroke::new(1.5_f32, gold);
     let o = 1.5; // brackets sit just outside the panel edge
     for (cx, cy, sx, sy) in [
         (rect.left() - o, rect.top() - o, 1.0, 1.0),
@@ -274,7 +274,7 @@ pub fn genshin_icon(p: &Painter, c: Pos2, r: f32, icon: GIcon, plate: Color32) {
         GIcon::Cancel => {
             p.circle_filled(c, r, crate::theme::hex(0x6a9fe0));
             let k = r * 0.42;
-            let st = Stroke::new(1.6, Color32::WHITE);
+            let st = Stroke::new(1.6_f32, Color32::WHITE);
             p.line_segment([c + vec2(-k, -k), c + vec2(k, k)], st);
             p.line_segment([c + vec2(-k, k), c + vec2(k, -k)], st);
         }
@@ -284,7 +284,7 @@ pub fn genshin_icon(p: &Painter, c: Pos2, r: f32, icon: GIcon, plate: Color32) {
             match icon {
                 GIcon::Plus | GIcon::Minus => {
                     let k = r * 0.5;
-                    let st = Stroke::new(1.8, ink);
+                    let st = Stroke::new(1.8_f32, ink);
                     p.line_segment([c + vec2(-k, 0.0), c + vec2(k, 0.0)], st);
                     if icon == GIcon::Plus {
                         p.line_segment([c + vec2(0.0, -k), c + vec2(0.0, k)], st);
@@ -380,9 +380,9 @@ pub fn pokeball(p: &Painter, c: Pos2, size: f32, ink: Color32, red: Color32, whi
     }
     p.add(Shape::convex_polygon(half, red, Stroke::NONE));
     p.rect_filled(Rect::from_center_size(c, vec2(size, size * 0.13)), 0.0, ink);
-    p.circle_stroke(c, r, Stroke::new(1.0, ink));
+    p.circle_stroke(c, r, Stroke::new(1.0_f32, ink));
     p.circle_filled(c, size * 0.19, white);
-    p.circle_stroke(c, size * 0.19, Stroke::new(1.0, ink));
+    p.circle_stroke(c, size * 0.19, Stroke::new(1.0_f32, ink));
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +393,6 @@ pub fn pokeball(p: &Painter, c: Pos2, size: f32, ink: Color32, red: Color32, whi
 pub enum Btn {
     Primary,
     Secondary,
-    Soft,
     Mini,
     MiniMuted,
 }
@@ -444,7 +443,6 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
     let (mut bg, mut border, mut fg, mut radius) = match kind {
         Btn::Primary => (if hovered { th.accent_dark } else { th.accent }, Color32::TRANSPARENT, th.on_accent, th.radius),
         Btn::Secondary => (th.secondary, if hovered { th.line_strong } else { Color32::TRANSPARENT }, th.text, th.radius),
-        Btn::Soft => (if hovered { th.surface } else { th.accent_soft }, th.accent, th.accent_dark, th.radius),
         Btn::Mini => (if hovered { th.accent_soft } else { Color32::TRANSPARENT }, if hovered { th.accent } else { th.line }, th.accent, th.radius),
         Btn::MiniMuted => (if hovered { th.accent_soft } else { Color32::TRANSPARENT }, if hovered { th.accent } else { th.line }, th.muted, th.radius),
     };
@@ -472,14 +470,6 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
                     };
                     border = if th.dark { rgba(Color32::WHITE, 0.55) } else { rgba(th.gold, 0.40) };
                     fg = ink;
-                }
-                Btn::Soft => {
-                    bg = if hovered { rgba(plate, 0.30) } else { rgba(plate, 0.16) };
-                    if th.dark {
-                        bg = if hovered { Color32::from_black_alpha(96) } else { Color32::from_black_alpha(64) };
-                    }
-                    border = if hovered { th.gold } else { rgba(th.gold, 0.85) };
-                    fg = th.text;
                 }
                 Btn::Mini | Btn::MiniMuted => {
                     border = if hovered { th.gold } else { rgba(th.gold, 0.78) };
@@ -513,11 +503,6 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
                     bg = if hovered { rgba(th.accent, 0.14) } else { rgba(th.surface, 0.80) };
                     border = if hovered { th.accent } else { rgba(th.accent, 0.62) };
                     fg = if hovered { th.text } else { th.accent };
-                }
-                Btn::Soft => {
-                    bg = rgba(th.accent, if hovered { 0.20 } else { 0.10 });
-                    border = if hovered { th.accent } else { rgba(th.accent, 0.80) };
-                    fg = th.accent;
                 }
                 Btn::Mini => {
                     bg = if hovered { rgba(th.accent, 0.14) } else { Color32::TRANSPARENT };
@@ -557,11 +542,6 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
                     border = th.ring;
                     fg = th.text;
                 }
-                Btn::Soft => {
-                    bg = if hovered { th.surface } else { th.surface2 };
-                    border = th.line_strong;
-                    fg = th.text;
-                }
                 Btn::Mini => {
                     bg = if hovered { th.surface2 } else { Color32::TRANSPARENT };
                     border = if hovered { th.ring } else { th.line };
@@ -583,10 +563,10 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
         if th.palette == Palette::Cyberpunk {
             p.add(Shape::closed_line(
                 chamfer_points(rect.expand(2.0), 8.0),
-                Stroke::new(3.0, g),
+                Stroke::new(3.0_f32, g),
             ));
         } else {
-            p.rect_stroke(rect.expand(1.5), cr(radius + 1.5), Stroke::new(3.0, g), StrokeKind::Middle);
+            p.rect_stroke(rect.expand(1.5), cr(radius + 1.5), Stroke::new(3.0_f32, g), StrokeKind::Middle);
         }
     }
     if th.palette == Palette::Cyberpunk {
@@ -617,19 +597,6 @@ pub fn button(ui: &mut Ui, th: &Theme, label: &str, kind: Btn, enabled: bool) ->
 // ---------------------------------------------------------------------------
 // Fields
 // ---------------------------------------------------------------------------
-
-pub const FIELD_H: f32 = 40.0;
-pub const LABEL_H: f32 = 13.0;
-pub const LABEL_GAP: f32 = 7.0;
-
-/// Uppercase caption above a control.
-pub fn label(ui: &Ui, th: &Theme, pos: Pos2, s: &str) {
-    if th.palette == Palette::Cyberpunk {
-        text_ls(ui, th, pos, Align2::LEFT_TOP, &s.to_uppercase(), Role::SansB, 11.5, th.muted, 0.09);
-    } else {
-        text_ls(ui, th, pos, Align2::LEFT_TOP, &s.to_uppercase(), Role::SansB, 10.88, th.muted, 0.03);
-    }
-}
 
 /// How a number field should draw attention to itself.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -704,7 +671,7 @@ pub fn field_s(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, 
             Palette::Pokemon => rgba(th.ring, 0.42),
             _ => rgba(th.ring, 0.40),
         };
-        p.rect_stroke(rect.expand(1.5), cr(r + 1.5), Stroke::new(3.0, ring), StrokeKind::Middle);
+        p.rect_stroke(rect.expand(1.5), cr(r + 1.5), Stroke::new(3.0_f32, ring), StrokeKind::Middle);
     }
     if cyber {
         // Dark outlined data cell; focus is the cyan selection cursor.
@@ -722,14 +689,14 @@ pub fn field_s(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, 
             // soft top highlight instead of the old pixel inset
             p.line_segment(
                 [rect.left_top() + vec2(8.0, 1.0), rect.right_top() + vec2(-8.0, 1.0)],
-                Stroke::new(1.0, rgba(th.line_strong, 0.35)),
+                Stroke::new(1.0_f32, rgba(th.line_strong, 0.35)),
             );
         }
         if gen && !invalid {
             // faint inner shade along the top edge, like an inset capsule
             p.line_segment(
                 [rect.left_top() + vec2(r.min(rect.height() / 2.0), 1.5), rect.right_top() + vec2(-r.min(rect.height() / 2.0), 1.5)],
-                Stroke::new(1.0, Color32::from_black_alpha(18)),
+                Stroke::new(1.0_f32, Color32::from_black_alpha(18)),
             );
         }
         stroke_in(&p, rect, r, if flagged { 2.0 } else if pk { 1.5 } else { 1.0 }, border);
@@ -768,18 +735,6 @@ pub fn field_s(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, 
     );
     value.retain(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'));
     *value != before
-}
-
-/// Caption + field stacked, occupying `rect.min` .. `rect.min + (w, 60)`.
-pub fn labeled_field(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, caption: &str, id: Id, value: &mut String, hint: &str, invalid: bool) -> bool {
-    labeled_field_s(ui, th, pos, w, caption, id, value, hint, if invalid { FieldState::Invalid } else { FieldState::Normal })
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn labeled_field_s(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, caption: &str, id: Id, value: &mut String, hint: &str, state: FieldState) -> bool {
-    label(ui, th, pos, caption);
-    let r = Rect::from_min_size(pos + vec2(0.0, LABEL_H + LABEL_GAP), vec2(w, FIELD_H));
-    field_s(ui, th, r, id, value, hint, state)
 }
 
 // ---------------------------------------------------------------------------
@@ -844,7 +799,7 @@ pub fn status_pill(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, msg: &str, s:
     }
     let dc = pos2(rect.left() + pad_l + disc / 2.0, rect.center().y);
     if s == crate::logic::Status::Pending {
-        p.circle_stroke(dc, disc * 0.24, Stroke::new(1.5, rgba(fg, 0.75)));
+        p.circle_stroke(dc, disc * 0.24, Stroke::new(1.5_f32, rgba(fg, 0.75)));
     } else {
         p.circle_filled(dc, disc / 2.0, fg);
         status_glyph(p, dc, disc * 0.36, s, bg);
@@ -949,6 +904,8 @@ pub struct CardOpts<'a> {
     pub alert: bool,
     /// Headline status shown right after the title (replaces the "Review" tag).
     pub status: Option<(crate::logic::Status, &'a str)>,
+    /// Draw only the header band (the body closure is not run).
+    pub collapsed: bool,
 }
 
 pub const HEAD_H: f32 = 48.0;
@@ -1004,16 +961,16 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
     let mut tx = min.x + bl + 20.0;
     if cyber {
         if let Some(b) = o.bar {
-            cyber_chip(&ui.painter(), pos2(tx + 5.0, mid_y), 11.0, b, b, rgba(th.surface, 0.85));
+            cyber_chip(ui.painter(), pos2(tx + 5.0, mid_y), 11.0, b, b, rgba(th.surface, 0.85));
             tx += 18.0;
         }
     }
     if gen {
         if let Some(b) = o.bar {
             let gc = pos2(tx + 6.0, mid_y);
-            diamond(&ui.painter(), gc, 7.5, th.gold, Stroke::NONE);
-            diamond(&ui.painter(), gc, 5.5, b, Stroke::NONE);
-            diamond(&ui.painter(), gc + vec2(-1.2, -1.6), 1.6, rgba(Color32::WHITE, 0.70), Stroke::NONE);
+            diamond(ui.painter(), gc, 7.5, th.gold, Stroke::NONE);
+            diamond(ui.painter(), gc, 5.5, b, Stroke::NONE);
+            diamond(ui.painter(), gc + vec2(-1.2, -1.6), 1.6, rgba(Color32::WHITE, 0.70), Stroke::NONE);
             tx += 20.0;
         }
     }
@@ -1061,10 +1018,14 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
     // body
     let inner_w = width - bl - 1.0 - 40.0;
     let body_rect = Rect::from_min_size(pos2(min.x + bl + 20.0, head_y + HEAD_H + CARD_PAD), vec2(inner_w, 10_000.0));
-    let mut child = ui.new_child(UiBuilder::new().max_rect(body_rect).layout(Layout::top_down(Align::Min)));
-    body(&mut child, inner_w);
-    let used_bottom = child.min_rect().bottom().max(body_rect.top());
-    let h = (used_bottom + CARD_PAD + 1.0 - min.y).max(o.min_height);
+    let h = if o.collapsed {
+        HEAD_H
+    } else {
+        let mut child = ui.new_child(UiBuilder::new().max_rect(body_rect).layout(Layout::top_down(Align::Min)));
+        body(&mut child, inner_w);
+        let used_bottom = child.min_rect().bottom().max(body_rect.top());
+        (used_bottom + CARD_PAD + 1.0 - min.y).max(o.min_height)
+    };
     let rect = Rect::from_min_size(min, vec2(width, h));
     crate::pikachu::perch(ui, Id::new(("pika-card", o.title, width as i32)), rect, crate::pikachu::PerchKind::Top, false);
 
@@ -1137,7 +1098,7 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
     } else {
         // the left edge is the coloured bar; draw the other three sides
         let c = border;
-        p.rect_stroke(rect, cr(r), Stroke::new(1.0, c), StrokeKind::Inside);
+        p.rect_stroke(rect, cr(r), Stroke::new(1.0_f32, c), StrokeKind::Inside);
         p.with_clip_rect(Rect::from_min_size(min, vec2(4.0, h))).rect_filled(rect, cr(r), bar.unwrap());
     }
     if th.palette == Palette::Pokemon {
@@ -1150,15 +1111,18 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
             stroke_in(&p, rect, r, 2.0, th.bad);
         }
     }
+    if o.collapsed {
+        return rect;
+    }
     let divider_y = min.y + HEAD_H - 0.5;
     let x0 = min.x + bl;
     let x1 = min.x + width - 1.0;
     match th.palette {
         Palette::Pokemon => {
-            p.line_segment([pos2(min.x + 20.0, divider_y), pos2(min.x + width - 20.0, divider_y)], Stroke::new(1.5, rgba(th.line_strong, 0.55)));
+            p.line_segment([pos2(min.x + 20.0, divider_y), pos2(min.x + width - 20.0, divider_y)], Stroke::new(1.5_f32, rgba(th.line_strong, 0.55)));
         }
         Palette::Genshin => {
-            p.line_segment([pos2(min.x + 20.0, divider_y), pos2(min.x + width - 20.0, divider_y)], Stroke::new(1.0, rgba(th.gold, 0.65)));
+            p.line_segment([pos2(min.x + 20.0, divider_y), pos2(min.x + width - 20.0, divider_y)], Stroke::new(1.0_f32, rgba(th.gold, 0.65)));
             diamond(&p, pos2(min.x + 14.0 + 3.5, divider_y), 3.5, th.gold, Stroke::NONE);
             diamond(&p, pos2(min.x + width - 14.0 - 3.5, divider_y), 3.5, th.gold, Stroke::NONE);
         }
@@ -1173,7 +1137,7 @@ pub fn card(ui: &mut Ui, th: &Theme, min: Pos2, width: f32, o: &CardOpts, body: 
             );
         }
         Palette::Default => {
-            p.line_segment([pos2(x0, divider_y), pos2(x1, divider_y)], Stroke::new(1.0, th.line));
+            p.line_segment([pos2(x0, divider_y), pos2(x1, divider_y)], Stroke::new(1.0_f32, th.line));
         }
     }
     rect

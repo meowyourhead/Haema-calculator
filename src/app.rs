@@ -65,6 +65,8 @@ pub struct App {
     pub attempts: Vec<String>,
     pub retic_note: Option<String>,
     pub calc_open: bool,
+    /// Retic reference table unfolded (folded by default).
+    pub ref_open: bool,
     pub dil: [String; 5],
     /// Theme popover (opened from the title bar's Theme button).
     pub menu_open: bool,
@@ -80,6 +82,16 @@ pub struct App {
     pub cyberpunk_unlocked: bool,
     /// The last few characters typed, for spotting the unlock code.
     typed: String,
+    /// Last window size requested by `fit_window`.
+    fit_req: Option<egui::Vec2>,
+    /// The page fits the window `fit_window` last asked for (no scrollbar needed).
+    page_fits: bool,
+    /// Default window size (every page at launch fits) for the theme it was
+    /// measured in; re-measured when the theme changes.
+    base: Option<((Palette, bool), egui::Vec2)>,
+    /// Off-screen context used by `default_window`, kept so a theme change
+    /// does not reparse every embedded font (a visible hitch otherwise).
+    measure_ctx: std::cell::OnceCell<egui::Context>,
     #[cfg(feature = "screenshot")]
     shot: crate::app::Shot,
 }
@@ -102,7 +114,16 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::fonts::install(&cc.egui_ctx);
         let Settings { dark, palette, mascots, cyberpunk_unlocked } = Settings::load();
-        let mut app = App {
+        #[allow(unused_mut)]
+        let mut app = App::blank(palette, dark, mascots, cyberpunk_unlocked, genshin_backdrop_texture(&cc.egui_ctx), pokemon_backdrop_texture(&cc.egui_ctx));
+        #[cfg(feature = "screenshot")]
+        app.apply_scene();
+        app
+    }
+
+    /// Every page empty and folded, as at launch.
+    fn blank(palette: Palette, dark: bool, mascots: bool, cyberpunk_unlocked: bool, genshin_backdrop: egui::TextureHandle, pokemon_backdrop: egui::TextureHandle) -> Self {
+        App {
             palette,
             dark,
             tab: Tab::Fbc,
@@ -115,23 +136,68 @@ impl App {
             attempts: vec![String::new(); MIN_ATTEMPTS],
             retic_note: None,
             calc_open: false,
+            ref_open: false,
             dil: Default::default(),
             menu_open: false,
             menu_btn: Rect::NOTHING,
-            genshin_backdrop: genshin_backdrop_texture(&cc.egui_ctx),
-            pokemon_backdrop: pokemon_backdrop_texture(&cc.egui_ctx),
+            genshin_backdrop,
+            pokemon_backdrop,
             styled: None,
             pika: crate::pikachu::Pikachu::new(),
             paimon: crate::paimon::Paimon::new(),
             mascots,
             cyberpunk_unlocked,
             typed: String::new(),
+            fit_req: None,
+            page_fits: true,
+            base: None,
+            measure_ctx: std::cell::OnceCell::new(),
             #[cfg(feature = "screenshot")]
             shot: Default::default(),
-        };
-        #[cfg(feature = "screenshot")]
-        app.apply_scene();
-        app
+        }
+    }
+
+    /// The default window: big enough for every page as it is at launch
+    /// (empty, Run 3 off, reference folded, calculations hidden) in this
+    /// theme, plus the margin and title bar. In practice the width comes from
+    /// Retic and the height from FBC with its dilution sheet. Laid out in a
+    /// throwaway egui context, so nothing on screen (fields, mascot perches,
+    /// focus) sees it. The first pass only loads the fonts.
+    fn default_window(&self) -> egui::Vec2 {
+        let ctx = self
+            .measure_ctx
+            .get_or_init(|| {
+                let ctx = egui::Context::default();
+                crate::fonts::install(&ctx);
+                ctx
+            })
+            .clone();
+        // Start from clean widget state, as a fresh context would (and so the
+        // perch / field lists the panels append to cannot pile up).
+        ctx.memory_mut(|m| m.data.clear());
+        let mut tmp = App::blank(self.palette, self.dark, false, self.cyberpunk_unlocked, self.genshin_backdrop.clone(), self.pokemon_backdrop.clone());
+        let th = tmp.theme();
+        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(4000.0, 4000.0))), ..Default::default() };
+        let mut size = vec2(0.0, 0.0);
+        for (pass, tab) in [Tab::Retic, Tab::Retic, Tab::Fbc, Tab::PtAptt].into_iter().enumerate() {
+            tmp.tab = tab;
+            let _ = ctx.run(raw.clone(), |ctx| {
+                tmp.apply_style(ctx, &th);
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
+                    let w = tmp.page_width(ui, &th).max(crate::chrome::min_width(ui, &th) - 2.0 * PAGE_MARGIN).ceil();
+                    let o = pos2(0.0, 0.0);
+                    let bottom = match tab {
+                        Tab::Retic => tmp.retic_panel(ui, &th, o, w),
+                        Tab::Fbc => tmp.checker_panel(ui, &th, o, w, true),
+                        Tab::PtAptt => tmp.checker_panel(ui, &th, o, w, false),
+                    };
+                    if pass > 0 {
+                        size = size.max(vec2(w + 2.0 * PAGE_MARGIN, crate::chrome::CHROME_H + bottom + 2.0 * PAGE_MARGIN));
+                    }
+                });
+            });
+        }
+        vec2(size.x.ceil(), size.y.ceil())
     }
 
     pub fn theme(&self) -> Theme {
@@ -150,8 +216,8 @@ impl App {
         v.window_fill = th.surface;
         v.override_text_color = None;
         v.selection.bg_fill = rgba(th.ring, 0.35);
-        v.selection.stroke = Stroke::new(1.0, th.text);
-        v.text_cursor.stroke = Stroke::new(1.5, th.text);
+        v.selection.stroke = Stroke::new(1.0_f32, th.text);
+        v.text_cursor.stroke = Stroke::new(1.5_f32, th.text);
         v.widgets.inactive.bg_stroke = Stroke::NONE;
         v.widgets.noninteractive.bg_stroke = Stroke::NONE;
         v.widgets.hovered.bg_stroke = Stroke::NONE;
@@ -226,7 +292,93 @@ impl App {
     fn save(&self) {
         Settings { dark: self.dark, palette: self.palette, mascots: self.mascots, cyberpunk_unlocked: self.cyberpunk_unlocked }.save();
     }
+
+    /// Page width inside the default window (before the margin), once measured.
+    pub fn default_page_width(&self) -> Option<f32> {
+        self.base.map(|(_, b)| b.x - 2.0 * PAGE_MARGIN)
+    }
+
+    /// The window keeps one size (`default_window`) whichever tab is shown;
+    /// pages that need more room scroll. The exception is expanded content
+    /// (Run 3 on FBC or PT / APTT; the reference table or calculations on
+    /// Retic), which grows the window just enough to show it, and shrinks it
+    /// back when folded away again. Never
+    /// while maximized; only re-requested when the wanted size changes.
+    fn fit_window(&mut self, ctx: &egui::Context, content_w: f32, content_h: f32) {
+        let key = (self.palette, self.dark);
+        if self.base.map(|(k, _)| k) != Some(key) {
+            self.base = Some((key, self.default_window()));
+        }
+        let base = self.base.map(|(_, b)| b).unwrap_or(vec2(860.0, 560.0));
+        let (minimized, maximized, monitor, outer) = ctx.input(|i| {
+            let v = i.viewport();
+            (v.minimized.unwrap_or(false), v.maximized.unwrap_or(false), v.monitor_size, v.outer_rect)
+        });
+        if maximized {
+            // re-fit on restore, in case the page changed meanwhile
+            self.fit_req = None;
+            return;
+        }
+        if minimized {
+            return;
+        }
+        let expanded = match self.tab {
+            Tab::Fbc => self.fbc.third,
+            Tab::PtAptt => self.pt.third,
+            Tab::Retic => self.ref_open || self.calc_open,
+        };
+        let (mut w, mut h) = (base.x, base.y);
+        let need_h = crate::chrome::CHROME_H + content_h + 2.0 * PAGE_MARGIN;
+        if expanded {
+            w = w.max(content_w + 2.0 * PAGE_MARGIN);
+            h = h.max(need_h);
+        }
+        if let Some(mon) = monitor {
+            // keep clear of the taskbar
+            let max_h = (mon.y - TASKBAR_ALLOWANCE).max(300.0);
+            if h > max_h {
+                h = max_h;
+                if expanded && need_h > h {
+                    let s = &ctx.style().spacing.scroll;
+                    w += s.bar_inner_margin + s.bar_width + s.bar_outer_margin;
+                }
+            }
+            w = w.min(mon.x);
+        }
+        let want = vec2(w.ceil(), h.ceil());
+        // Will the whole page fit once the window has this size? Then no
+        // scrollbar is needed, even in the frame or two before it arrives.
+        self.page_fits = want.y + 0.5 >= need_h;
+        if self.fit_req == Some(want) {
+            return;
+        }
+        self.fit_req = Some(want);
+
+        // If growing would push the window off the bottom or right of the
+        // screen, slide it back on first, so it never pokes off-screen and
+        // then jumps. Only for a window on the primary monitor, whose
+        // coordinates start at the origin.
+        if let (Some(mon), Some(o)) = (monitor, outer) {
+            if o.left() >= 0.0 && o.top() >= 0.0 && o.left() < mon.x && o.top() < mon.y {
+                let chrome_extra = o.size() - ctx.screen_rect().size();
+                let full = want + chrome_extra.max(vec2(0.0, 0.0));
+                let x = o.left().min((mon.x - full.x).max(0.0));
+                let y = o.top().min((mon.y - TASKBAR_ALLOWANCE - full.y).max(0.0));
+                if (x - o.left()).abs() > 0.5 || (y - o.top()).abs() > 0.5 {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos2(x, y)));
+                }
+            }
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(want));
+    }
 }
+
+/// Background left showing around the page on every side.
+pub const PAGE_MARGIN: f32 = 24.0;
+/// Narrowest side margin, when a scrollbar has taken some of it.
+const MIN_SIDE: f32 = 8.0;
+/// Room left at the bottom of the screen for the taskbar.
+const TASKBAR_ALLOWANCE: f32 = 56.0;
 
 /// Typed anywhere in the app to show / hide the Cyberpunk theme.
 const UNLOCK_CODE: &str = "2077";
@@ -316,31 +468,6 @@ impl Settings {
     }
 }
 
-#[cfg(test)]
-mod settings_tests {
-    use super::*;
-
-    #[test]
-    fn cyberpunk_needs_unlock() {
-        assert_eq!(Settings::parse("palette=cyberpunk\n").palette, Palette::Default);
-        let s = Settings::parse("palette=cyberpunk\ncyberpunk=unlocked\n");
-        assert_eq!(s.palette, Palette::Cyberpunk);
-        assert!(s.cyberpunk_unlocked);
-        assert!(!Settings::parse("").cyberpunk_unlocked);
-    }
-
-    #[test]
-    fn unlock_code_spans_keystrokes() {
-        let mut buf = String::new();
-        // typed one key per frame, with other text before it
-        let hits: usize = ["1", "2", "0", "7", "7"].iter().map(|k| feed_unlock_code(&mut buf, k)).sum();
-        assert_eq!(hits, 1);
-        assert_eq!(feed_unlock_code(&mut buf, "20772077"), 2);
-        assert_eq!(feed_unlock_code(&mut buf, "207.7"), 0);
-        assert_eq!(feed_unlock_code(&mut buf, "2o77"), 0);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Frame
 // ---------------------------------------------------------------------------
@@ -366,19 +493,23 @@ impl eframe::App for App {
 
         crate::chrome::title_bar(self, ctx);
 
+        let mut fit: Option<(f32, f32)> = None;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(th.bg)).show(ctx, |ui| {
             let screen = ui.max_rect();
             paint_page_background(ui, &th, screen, &self.genshin_backdrop, &self.pokemon_backdrop);
 
-            // Theme controls live in the title bar, so the results get the full
-            // width (capped so rows stay scannable on wide monitors).
-            let app_w = (screen.width() - 48.0).min(1280.0).max(300.0);
-            let left = screen.left() + ((screen.width() - app_w) / 2.0).max(24.0);
-            let content_left = left;
-            let content_w = app_w;
+            // The page is laid out at its natural width and the window is
+            // sized around it (see `fit_window`), leaving the same band of
+            // background on every side.
+            let natural = self.page_width(ui, &th).max(crate::chrome::min_width(ui, &th) - 2.0 * PAGE_MARGIN).ceil();
 
             #[allow(unused_mut)]
             let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]).drag_to_scroll(false);
+            if self.page_fits {
+                // The window is about to grow to fit the page: a scrollbar
+                // flashing in for the frames in between would shift the page.
+                area = area.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+            }
             #[cfg(feature = "screenshot")]
             if self.shot.path.is_some() {
                 // Only while rendering a screenshot: pinning the offset every
@@ -386,20 +517,29 @@ impl eframe::App for App {
                 area = area.vertical_scroll_offset(self.shot.scroll);
             }
             area.show(ui, |ui| {
-                let origin = pos2(content_left, ui.cursor().min.y + 12.0);
+                let view = ui.max_rect();
+                // A scrollbar eats into the side margin before it squeezes the page.
+                // Centred on the whole window, not the area beside a
+                // scrollbar, so the page stays put when a scrollbar comes or goes.
+                let content_w = natural.min(view.width() - 2.0 * MIN_SIDE).max(300.0);
+                let left = (screen.left() + ((screen.width() - content_w) / 2.0).max(MIN_SIDE)).min(view.right() - MIN_SIDE - content_w).floor();
+                let origin = pos2(left, ui.cursor().min.y + PAGE_MARGIN);
                 let bottom = match self.tab {
                     Tab::Fbc => self.checker_panel(ui, &th, origin, content_w, true),
                     Tab::PtAptt => self.checker_panel(ui, &th, origin, content_w, false),
                     Tab::Retic => self.retic_panel(ui, &th, origin, content_w),
                 };
                 let top = ui.cursor().min;
-                ui.allocate_rect(Rect::from_min_max(top, pos2(ui.max_rect().right(), bottom + 60.0)), Sense::hover());
+                ui.allocate_rect(Rect::from_min_max(top, pos2(ui.max_rect().right(), bottom + PAGE_MARGIN)), Sense::hover());
+                fit = Some((natural, bottom - origin.y));
                 nav_fields(ui, focus_before);
             });
 
             crate::pikachu::perch(ui, Id::new("pika-floor"), screen, crate::pikachu::PerchKind::Floor, false);
-            crate::chrome::resize_frame(ui);
         });
+        if let Some((w, h)) = fit {
+            self.fit_window(ctx, w, h);
+        }
 
         if self.menu_open {
             self.theme_menu(ctx);
@@ -679,7 +819,7 @@ impl App {
         }
         y += toggle_h;
         let div_c = if th.palette == Palette::Genshin { rgba(hex(0xd3bc8e), 0.35) } else { th.line };
-        p.line_segment([pos2(origin.x + 2.0, y + MENU_SPLIT / 2.0), pos2(origin.x + w - 2.0, y + MENU_SPLIT / 2.0)], Stroke::new(1.0, div_c));
+        p.line_segment([pos2(origin.x + 2.0, y + MENU_SPLIT / 2.0), pos2(origin.x + w - 2.0, y + MENU_SPLIT / 2.0)], Stroke::new(1.0_f32, div_c));
         y += MENU_SPLIT - gap;
 
         // --- palettes
@@ -718,10 +858,10 @@ impl App {
                 Palette::Default => {
                     p.circle_filled(sc, 5.0, sw_border);
                     p.circle_filled(sc, 4.0, th.surface);
-                    p.circle_filled(sc, 2.5, if active { th.accent } else if active_bg_secondary(th) { th.secondary } else { th.surface });
+                    p.circle_filled(sc, 2.5, if active { th.accent } else { th.secondary });
                 }
                 Palette::Genshin => {
-                    diamond(&p, sc, 4.5, if active { sw_fill } else { Color32::TRANSPARENT }, Stroke::new(1.0, sw_border));
+                    diamond(&p, sc, 4.5, if active { sw_fill } else { Color32::TRANSPARENT }, Stroke::new(1.0_f32, sw_border));
                 }
                 Palette::Pokemon => {
                     pokeball(&p, sc, 8.0, th.ink, th.accent, Color32::WHITE);
@@ -744,10 +884,6 @@ impl App {
             y += toggle_h;
         }
     }
-}
-
-fn active_bg_secondary(_th: &Theme) -> bool {
-    true
 }
 
 /// Sidebar pill button (theme / palette toggles).
@@ -815,6 +951,31 @@ fn side_toggle(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, active: bool) -> egu
     resp
 }
 
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn cyberpunk_needs_unlock() {
+        assert_eq!(Settings::parse("palette=cyberpunk\n").palette, Palette::Default);
+        let s = Settings::parse("palette=cyberpunk\ncyberpunk=unlocked\n");
+        assert_eq!(s.palette, Palette::Cyberpunk);
+        assert!(s.cyberpunk_unlocked);
+        assert!(!Settings::parse("").cyberpunk_unlocked);
+    }
+
+    #[test]
+    fn unlock_code_spans_keystrokes() {
+        let mut buf = String::new();
+        // typed one key per frame, with other text before it
+        let hits: usize = ["1", "2", "0", "7", "7"].iter().map(|k| feed_unlock_code(&mut buf, k)).sum();
+        assert_eq!(hits, 1);
+        assert_eq!(feed_unlock_code(&mut buf, "20772077"), 2);
+        assert_eq!(feed_unlock_code(&mut buf, "207.7"), 0);
+        assert_eq!(feed_unlock_code(&mut buf, "2o77"), 0);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Developer screenshot harness (cargo feature "screenshot")
 // HAEM_SHOT=out.png HAEM_SCENE="tab=retic,palette=genshin,dark=1,fill=1,calc=1,third=1" HAEM_SIZE=1180x820
@@ -847,6 +1008,7 @@ impl App {
                 "dark" => self.dark = v == "1",
                 "fill" => fill_data = v == "1",
                 "calc" => self.calc_open = v == "1",
+                "ref" => self.ref_open = v == "1",
                 "menu" => self.menu_open = v == "1",
                 "third" => {
                     self.fbc.third = v == "1";

@@ -226,7 +226,7 @@ impl Paimon {
         self.timers(dt);
         self.update_particles(dt);
         self.draw(ctx, th, &ps);
-        ctx.request_repaint();
+        crate::pikachu::request_anim_frame(ctx);
     }
 
     fn station_point(&self, st: Station, ps: &[Perch], sit: bool) -> Option<Pos2> {
@@ -266,7 +266,7 @@ impl Paimon {
             if p.kind == PerchKind::Floor {
                 score *= 0.3;
             }
-            if best.as_ref().map_or(true, |b| score > b.0) {
+            if best.as_ref().is_none_or(|b| score > b.0) {
                 best = Some((score, Station::Perch { id: p.id, dx }));
             }
         }
@@ -459,7 +459,7 @@ impl Paimon {
         for p in ps.iter().filter(|p| p.kind != PerchKind::Hang && !too_high(p, screen)) {
             let dx = (self.pos.x - p.x0).clamp(0.0, p.x1 - p.x0);
             let d = (pos2(p.x0 + dx, p.y - HOVER) - self.pos).length();
-            if best.as_ref().map_or(true, |b| d < b.0) {
+            if best.as_ref().is_none_or(|b| d < b.0) {
                 best = Some((d, Station::Perch { id: p.id, dx }));
             }
         }
@@ -491,13 +491,12 @@ impl Paimon {
                     self.emit(PartKind::Z, at, vec2(self.facing * 6.0, -14.0), 1.8);
                 }
             }
-            Idle::Twirl | Idle::Cheer => {
-                if self.fx_t <= 0.0 {
+            Idle::Twirl | Idle::Cheer
+                if self.fx_t <= 0.0 => {
                     self.fx_t = 0.12;
                     let at = self.pos + vec2(px(self.range(-13.0, 13.0)), -px(self.range(5.0, 45.0)));
                     self.emit(PartKind::Star, at, vec2(0.0, -20.0), 0.6);
                 }
-            }
             _ => {}
         }
     }

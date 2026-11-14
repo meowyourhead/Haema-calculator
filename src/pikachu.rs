@@ -95,6 +95,22 @@ pub fn perch(ui: &Ui, id: Id, rect: Rect, kind: PerchKind, pressed: bool) {
     });
 }
 
+/// Schedule the next mascot animation frame. Capped at ~60 fps while focused
+/// (high-refresh monitors would otherwise repaint the whole UI at 120–240 Hz),
+/// ~20 fps while another window has focus, and paused while minimized (the
+/// restore event wakes the app; `dt` is clamped so nothing jumps).
+pub(crate) fn request_anim_frame(ctx: &egui::Context) {
+    let (minimized, focused) = ctx.input(|i| {
+        let v = i.viewport();
+        (v.minimized.unwrap_or(false), v.focused.unwrap_or(true))
+    });
+    if minimized {
+        return;
+    }
+    let fps = if focused { 60.0 } else { 20.0 };
+    ctx.request_repaint_after(std::time::Duration::from_secs_f32(1.0 / fps));
+}
+
 pub(crate) fn find(perches: &[Perch], id: Id) -> Option<Perch> {
     perches.iter().find(|p| p.id == id).copied()
 }
@@ -113,7 +129,7 @@ fn goal_perch(perches: &[Perch], g: Pos2) -> Option<Perch> {
             _ if p.y >= g.y - 28.0 => (p.y - g.y).abs(),
             _ => continue,
         };
-        if best.as_ref().map_or(true, |b| d < b.0) {
+        if best.as_ref().is_none_or(|b| d < b.0) {
             best = Some((d, *p));
         }
     }
@@ -378,7 +394,7 @@ impl Pikachu {
         self.timers(dt);
         self.update_particles(dt);
         self.draw(ctx, th, &perches);
-        ctx.request_repaint();
+        request_anim_frame(ctx);
     }
 
     fn set(&mut self, a: Act) {
@@ -696,7 +712,7 @@ impl Pikachu {
                 if p.kind == PerchKind::Hang || self.pos.x < p.x0 || self.pos.x > p.x1 {
                     continue;
                 }
-                if prev <= p.y + 0.5 && self.pos.y >= p.y && hit.map_or(true, |h| p.y < h.y) {
+                if prev <= p.y + 0.5 && self.pos.y >= p.y && hit.is_none_or(|h| p.y < h.y) {
                     hit = Some(*p);
                 }
             }
@@ -831,7 +847,7 @@ impl Pikachu {
                 PerchKind::Floor => score *= 0.35,
                 PerchKind::Top => {}
             }
-            if best.as_ref().map_or(true, |b| score > b.0) {
+            if best.as_ref().is_none_or(|b| score > b.0) {
                 let pounce = dx.abs() > 34.0 && p.kind != PerchKind::Hang;
                 best = Some((score, Target { id: p.id, dx: x - p.x0, kind: p.kind, pounce }));
             }
@@ -1042,7 +1058,7 @@ impl Pikachu {
                 continue;
             }
             let d = (spot - pos2(x, p.y)).length();
-            if d < d_now - 20.0 && best.as_ref().map_or(true, |b| d < b.0) {
+            if d < d_now - 20.0 && best.as_ref().is_none_or(|b| d < b.0) {
                 best = Some((d, Target { id: p.id, dx: x - p.x0, kind: p.kind, pounce: pounce(x, self.pos.x, p.kind) }));
             }
         }
@@ -1165,13 +1181,12 @@ impl Pikachu {
                     self.set(Act::Idle { kind: Idle::Curious, dur });
                 }
             }
-            Act::Move { gait: Gait::Walk, .. } => {
-                if d < 60.0 && fast {
+            Act::Move { gait: Gait::Walk, .. }
+                if d < 60.0 && fast => {
                     self.bubble = Some(("!", 0.9));
                     let away = (self.pos.x - hp.x).signum();
                     self.set(Act::Startle { away });
                 }
-            }
             _ => {}
         }
     }

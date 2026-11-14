@@ -5,14 +5,6 @@ use crate::theme::{hex, rgba, Palette, Role, Theme};
 use crate::ui::*;
 use eframe::egui::{self, pos2, vec2, Align, Align2, Color32, CornerRadius, Id, Layout, Pos2, Rect, Sense, Stroke, Ui, UiBuilder};
 
-fn toolbar(ui: &mut Ui, origin: Pos2, width: f32, f: impl FnOnce(&mut Ui)) -> f32 {
-    let r = Rect::from_min_size(origin, vec2(width, 36.0));
-    let mut child = ui.new_child(UiBuilder::new().max_rect(r).layout(Layout::right_to_left(Align::Min)));
-    child.spacing_mut().item_spacing.x = 10.0;
-    f(&mut child);
-    origin.y + 36.0 + 16.0
-}
-
 fn status_colors(th: &Theme, s: Status) -> Color32 {
     match s {
         Status::Ok => th.ok,
@@ -108,6 +100,8 @@ fn overall_message(ck: &Checker, evals: &[ParamEval]) -> (Status, String) {
 const ROW_H: f32 = 46.0;
 const CELL_H: f32 = 32.0;
 const RUN_W: f32 = 84.0;
+/// Run boxes when space is tight: still fits "13.75" comfortably.
+const RUN_W_COMPACT: f32 = 74.0;
 const RUN_GAP: f32 = 10.0;
 const COL_GAP: f32 = 22.0;
 const HEAD_ROW: f32 = 26.0;
@@ -155,11 +149,18 @@ struct Sheet {
     cmp_x: f32,
     pct_w: f32,
     cmp_w: f32,
-    /// Natural inner width with everything on one line.
+    run_w: f32,
+    /// Comparisons say "Acceptable" / "Check value" beside the symbol; the
+    /// compact form keeps only the ✓ / ! symbol.
+    words: bool,
+    /// Inner width with everything on one line.
     inner: f32,
 }
 
-fn sheet_layout(ui: &Ui, th: &Theme, params: &[ParamDef], third: bool) -> Sheet {
+/// The run sheet in the roomiest form that fits `avail`: full words, then
+/// symbols only, then narrower run boxes. If even that is too wide the
+/// comparisons wrap under the runs (see `sheet_body`).
+fn sheet_layout(ui: &Ui, th: &Theme, params: &[ParamDef], third: bool, avail: f32) -> Sheet {
     let name_w = params
         .iter()
         .map(|p| text_width(ui, th, p.name, Role::SansB, 15.0) + 6.0 + text_width(ui, th, p.unit, Role::Sans, 11.5))
@@ -169,12 +170,28 @@ fn sheet_layout(ui: &Ui, th: &Theme, params: &[ParamDef], third: bool) -> Sheet 
     let n = if third { 3.0 } else { 2.0 };
     let m = run_pairs(third).len() as f32;
     let pct_w = text_width(ui, th, "100.00%", Role::MonoB, 14.0).ceil();
-    let cmp_w = pct_w + 10.0 + badge_width(ui, th, "Acceptable").max(badge_width(ui, th, "Check value")).ceil();
     let limit_x = name_w + COL_GAP;
     let runs_x = limit_x + limit_w + COL_GAP;
-    let cmp_x = runs_x + n * RUN_W + (n - 1.0) * RUN_GAP + COL_GAP;
-    let inner = cmp_x + m * cmp_w + (m - 1.0) * COL_GAP;
-    Sheet { limit_x, runs_x, cmp_x, pct_w, cmp_w, inner }
+    let build = |words: bool, run_w: f32| {
+        let cmp_w = if words {
+            pct_w + 10.0 + badge_width(ui, th, "Acceptable").max(badge_width(ui, th, "Check value")).ceil()
+        } else {
+            // the symbol, or a heading like "1 vs 2" if that is wider
+            (pct_w + 20.0).max(text_width(ui, th, "1 vs 2", Role::SansB, 12.0).ceil())
+        };
+        let cmp_x = runs_x + n * run_w + (n - 1.0) * RUN_GAP + COL_GAP;
+        let inner = cmp_x + m * cmp_w + (m - 1.0) * COL_GAP;
+        Sheet { limit_x, runs_x, cmp_x, pct_w, cmp_w, run_w, words, inner }
+    };
+    let options = [(true, RUN_W), (false, RUN_W), (false, RUN_W_COMPACT)];
+    let mut sh = build(true, RUN_W);
+    for (words, run_w) in options {
+        sh = build(words, run_w);
+        if sh.inner <= avail + 0.5 {
+            break;
+        }
+    }
+    sh
 }
 
 /// One comparison: the difference, then a glyph + word verdict. Pending
@@ -212,13 +229,14 @@ fn sheet_body(ui: &mut Ui, th: &Theme, iw: f32, sh: &Sheet, key: &str, params: &
     let hm = o.y + HEAD_ROW / 2.0 - 4.0;
     col_head(ui, th, pos2(o.x + sh.limit_x, hm), Align2::LEFT_CENTER, "Limit", th.muted);
     for k in 0..n {
-        let x = o.x + sh.runs_x + k as f32 * (RUN_W + RUN_GAP);
+        let x = o.x + sh.runs_x + k as f32 * (sh.run_w + RUN_GAP);
         col_head(ui, th, pos2(x + inset, hm), Align2::LEFT_CENTER, &format!("Run {}", k + 1), th.muted);
     }
     if !stacked {
         for (j, (a, b)) in pairs.iter().enumerate() {
             let x = o.x + sh.cmp_x + j as f32 * (sh.cmp_w + COL_GAP);
-            col_head(ui, th, pos2(x + sh.pct_w, hm), Align2::RIGHT_CENTER, &format!("Run {} vs {}", a + 1, b + 1), th.muted);
+            let head = if sh.words { format!("Run {} vs {}", a + 1, b + 1) } else { format!("{} vs {}", a + 1, b + 1) };
+            col_head(ui, th, pos2(x + sh.pct_w, hm), Align2::RIGHT_CENTER, &head, th.muted);
         }
     }
     let mut y = o.y + HEAD_ROW;
@@ -254,7 +272,7 @@ fn sheet_body(ui: &mut Ui, th: &Theme, iw: f32, sh: &Sheet, key: &str, params: &
 
         // runs
         for k in 0..n {
-            let x = o.x + sh.runs_x + k as f32 * (RUN_W + RUN_GAP);
+            let x = o.x + sh.runs_x + k as f32 * (sh.run_w + RUN_GAP);
             let state = if parse_positive(&vals[i][k]) == Num::Invalid {
                 FieldState::Invalid
             } else if evals[i].flagged_runs[k] {
@@ -262,7 +280,7 @@ fn sheet_body(ui: &mut Ui, th: &Theme, iw: f32, sh: &Sheet, key: &str, params: &
             } else {
                 FieldState::Normal
             };
-            let r = Rect::from_min_size(pos2(x, mid - CELL_H / 2.0), vec2(RUN_W, CELL_H));
+            let r = Rect::from_min_size(pos2(x, mid - CELL_H / 2.0), vec2(sh.run_w, CELL_H));
             field_s(ui, th, r, Id::new((key, p.id, k)), &mut vals[i][k], "", state);
         }
 
@@ -279,7 +297,7 @@ fn sheet_body(ui: &mut Ui, th: &Theme, iw: f32, sh: &Sheet, key: &str, params: &
                 sx = comparison(ui, th, cap.right() + 6.0 + tw - sh.pct_w, cm, sh.pct_w, &res, false) + 22.0;
             } else {
                 let x = o.x + sh.cmp_x + j as f32 * (sh.cmp_w + COL_GAP);
-                comparison(ui, th, x, mid, sh.pct_w, &res, true);
+                comparison(ui, th, x, mid, sh.pct_w, &res, sh.words);
             }
         }
 
@@ -309,7 +327,7 @@ impl App {
 
         // Both sheets share one width: the wider of the two at their natural
         // size, centred, so the page reads as one compact column.
-        let sh = sheet_layout(ui, th, params, third);
+        let sh = sheet_layout(ui, th, params, third, w - CARD_CHROME);
         let mut cw = sh.inner + CARD_CHROME;
         if is_fbc {
             cw = cw.max(dilution_natural(ui, th) + CARD_CHROME);
@@ -329,6 +347,7 @@ impl App {
             min_height: 0.0,
             alert: st == Status::Bad,
             status: Some((st, &msg)),
+            collapsed: false,
         };
         let vals = &mut ck.vals;
         let rect = card(ui, th, pos2(x0, origin.y), cw, &opts, |ui, iw| sheet_body(ui, th, iw, &sh, key, params, vals, third, &evals));
@@ -371,6 +390,63 @@ impl App {
 // ---------------------------------------------------------------------------
 // Reticulocyte
 // ---------------------------------------------------------------------------
+
+/// Retic inputs: wide enough for five characters ("38.25"), no wider.
+const R_IN_W: f32 = 76.0;
+const GENDER_W: f32 = 140.0;
+const R_IN_GAP: f32 = 12.0;
+/// Caption band above a compact field.
+const R_CAP_H: f32 = 18.0;
+/// Counting-helper boxes: counts are at most four digits.
+const ATTEMPT_W: f32 = 68.0;
+const ATTEMPT_COLS: usize = 4;
+const R_CARD_GAP: f32 = 16.0;
+
+fn mini_btn_w(ui: &Ui, th: &Theme, s: &str) -> f32 {
+    text_width(ui, th, s, Role::SansB, 12.8) * if th.palette == Palette::Cyberpunk { 1.15 } else { 1.0 } + 26.0
+}
+
+/// Card title plus header text, with room for Cyberpunk's tracked capitals.
+fn head_w(ui: &Ui, th: &Theme, title: &str, unit: &str) -> f32 {
+    let t = text_width(ui, th, title, Role::Display, 16.0) * if th.palette == Palette::Cyberpunk { 1.25 } else { 1.0 };
+    let u = if unit.is_empty() { 0.0 } else { 8.0 + text_width(ui, th, unit, Role::Sans, 11.84) };
+    t + u
+}
+
+/// Natural inner width of the counting helper.
+fn helper_inner(ui: &Ui, th: &Theme) -> f32 {
+    let n = ATTEMPT_COLS as f32;
+    let grid = n * ATTEMPT_W + (n - 1.0) * R_IN_GAP;
+    let avg = text_width(ui, th, "Average of 12", Role::Sans, 13.0) + 16.0 + text_width(ui, th, "100.00 %", Role::MonoB, 16.0) + 10.0 + mini_btn_w(ui, th, "Use as retic %");
+    grid.max(head_w(ui, th, "Counting helper", "retics / 1000 RBCs")).max(avg).ceil()
+}
+
+/// Natural inner width of the Reticulocyte card.
+fn main_inner(ui: &Ui, th: &Theme) -> f32 {
+    // the last caption ("RBC ×10¹²/L") is wider than its box
+    let cap = text_width(ui, th, "RBC ×10¹²/L", Role::SansB, 12.0) * if th.palette == Palette::Cyberpunk { 1.2 } else { 1.0 };
+    let inputs = 2.0 * R_IN_W + GENDER_W + 3.0 * R_IN_GAP + R_IN_W.max(cell_inset(th) + cap + 4.0);
+    let head = head_w(ui, th, "Reticulocyte", "") + 24.0 + mini_btn_w(ui, th, "Hide calculations") + 8.0 + mini_btn_w(ui, th, "Clear");
+    inputs.max(head).ceil()
+}
+
+impl App {
+    /// Inner width a run sheet has in the default window.
+    fn sheet_room(&self) -> f32 {
+        self.default_page_width().map(|w| w - CARD_CHROME).unwrap_or(f32::INFINITY)
+    }
+
+    /// Natural width of the current page, before the window margin.
+    pub fn page_width(&self, ui: &Ui, th: &Theme) -> f32 {
+        match self.tab {
+            // Run 3 makes the sheet wider: it takes its compact form if that
+            // keeps it within the default window, so the window only grows down.
+            Tab::Fbc => (sheet_layout(ui, th, &FBC_PARAMS, self.fbc.third, self.sheet_room()).inner.max(dilution_natural(ui, th)) + CARD_CHROME).ceil(),
+            Tab::PtAptt => (sheet_layout(ui, th, &PT_PARAMS, self.pt.third, self.sheet_room()).inner + CARD_CHROME).ceil(),
+            Tab::Retic => self.retic_width(ui, th).ceil(),
+        }
+    }
+}
 
 pub struct ReticOut {
     pub corrected_text: String,
@@ -590,52 +666,44 @@ impl App {
         self.retic_note = None;
     }
 
-    pub fn retic_panel(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
-        let mut y = origin.y;
-        let (mut reset, mut toggle) = (false, false);
-        let calc_open = self.calc_open;
-        y = toolbar(ui, pos2(origin.x, y), w, |ui| {
-            if button(ui, th, "Reset", Btn::Secondary, true).clicked() {
-                reset = true;
-            }
-            let (l, k) = if calc_open { ("Hide calculations", Btn::Primary) } else { ("Show calculations", Btn::Soft) };
-            if button(ui, th, l, k, true).clicked() {
-                toggle = true;
-            }
-        });
-        if reset {
-            self.reset_retic();
-            ui.memory_mut(|m| m.request_focus(Id::new("r-retic")));
-        }
-        if toggle {
-            self.calc_open = !self.calc_open;
-        }
+    /// Natural width of the Retic page: the two cards side by side at their
+    /// compact sizes, or the reference table, whichever is wider.
+    pub fn retic_width(&self, ui: &Ui, th: &Theme) -> f32 {
+        let row = helper_inner(ui, th) + CARD_CHROME + R_CARD_GAP + main_inner(ui, th) + CARD_CHROME;
+        // A folded reference table is only a header, so it does not widen the page.
+        if self.ref_open { row.max(crate::reference::natural_width(ui, th) + CARD_CHROME) } else { row }
+    }
 
+    pub fn retic_panel(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
+        let y = origin.y;
         let out = self.compute_retic();
-        let two_col = w >= 860.0;
-        let gap = 16.0;
+        let gap = R_CARD_GAP;
+        let helper_w = (helper_inner(ui, th) + CARD_CHROME).ceil();
+        let two_col = w >= helper_w + gap + main_inner(ui, th) + CARD_CHROME;
         let h_id = Id::new("retic-grid-h");
         let min_h: f32 = if two_col { ui.ctx().data(|d| d.get_temp(h_id)).unwrap_or(0.0) } else { 0.0 };
 
-        let (helper_pos, helper_w, main_pos, main_w);
-        if two_col {
-            let u = (w - gap) / 3.0;
-            helper_pos = pos2(origin.x, y);
-            helper_w = u;
-            main_pos = pos2(origin.x + u + gap, y);
-            main_w = 2.0 * u;
-        } else {
-            main_pos = pos2(origin.x, y);
-            main_w = w;
-            helper_w = w;
-            helper_pos = pos2(origin.x, y); // fixed below
-        }
+        // The counting helper sits first (left): its average feeds retic %.
+        // It keeps its compact width; the results card takes the rest.
+        let (main_pos, main_w) = if two_col { (pos2(origin.x + helper_w + gap, y), w - helper_w - gap) } else { (pos2(origin.x, y), w) };
 
-        let main_opts = CardOpts { title: "Reticulocyte", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: min_h, alert: false, status: None };
+        let main_opts = CardOpts { title: "Reticulocyte", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: min_h, alert: false, status: None, collapsed: false };
         let main_rect = card(ui, th, main_pos, main_w, &main_opts, |ui, iw| self.retic_main_body(ui, th, iw, &out));
-        let helper_pos = if two_col { helper_pos } else { pos2(origin.x, main_rect.bottom() + gap) };
-        let helper_opts = CardOpts { title: "Counting helper", unit: "retics / 1000 RBCs", bar: None, head_bg: None, title_color: None, chip: None, min_height: min_h, alert: false, status: None };
-        let helper_rect = card(ui, th, helper_pos, helper_w, &helper_opts, |ui, iw| self.helper_body(ui, th, iw));
+        let (mut clear, mut toggle) = (false, false);
+        let calc_open = self.calc_open;
+        header_buttons(ui, main_rect, |ui| {
+            if button(ui, th, "Clear", Btn::MiniMuted, true).clicked() {
+                clear = true;
+            }
+            let label = if calc_open { "Hide calculations" } else { "Show calculations" };
+            if button(ui, th, label, Btn::Mini, true).clicked() {
+                toggle = true;
+            }
+        });
+
+        let helper_pos = if two_col { origin } else { pos2(origin.x, main_rect.bottom() + gap) };
+        let helper_opts = CardOpts { title: "Counting helper", unit: "retics / 1000 RBCs", bar: None, head_bg: None, title_color: None, chip: None, min_height: min_h, alert: false, status: None, collapsed: false };
+        let helper_rect = card(ui, th, helper_pos, if two_col { helper_w } else { w }, &helper_opts, |ui, iw| self.helper_body(ui, th, iw));
         let row_h = main_rect.height().max(helper_rect.height());
         if two_col {
             let prev: f32 = ui.ctx().data(|d| d.get_temp(h_id)).unwrap_or(0.0);
@@ -644,44 +712,61 @@ impl App {
                 ui.ctx().request_repaint();
             }
         }
-        y = main_rect.bottom().max(helper_rect.bottom()) + 16.0;
+        if clear {
+            self.reset_retic();
+            ui.memory_mut(|m| m.request_focus(Id::new(("r-attempt", 0usize))));
+        }
+        if toggle {
+            self.calc_open = !self.calc_open;
+        }
+        let mut y = main_rect.bottom().max(helper_rect.bottom()) + 16.0;
 
         if self.calc_open {
             y = self.calc_card(ui, th, pos2(origin.x, y), w) + 16.0;
         }
-        let bottom = crate::reference::reference_card(ui, th, pos2(origin.x, y), w);
-        bottom
+        crate::reference::reference_card(ui, th, pos2(origin.x, y), w, &mut self.ref_open)
     }
 
     fn retic_main_body(&mut self, ui: &mut Ui, th: &Theme, iw: f32, out: &ReticOut) {
         let o = ui.cursor().min;
-        let gap = 10.0;
-        let colw = (iw - 3.0 * gap) / 4.0;
-        let xc = |k: usize| o.x + k as f32 * (colw + gap);
-
-        let inv = parse_number(&self.r_retic) == Num::Invalid;
-        if labeled_field(ui, th, pos2(xc(0), o.y), colw, "retic (%)", Id::new("r-retic"), &mut self.r_retic, "e.g. 0.9", inv) {
+        let inset = cell_inset(th);
+        // Four compact inputs in one line, captions above, left-aligned: the
+        // values are a few digits, so the boxes are sized for that.
+        let widths = [R_IN_W, R_IN_W, GENDER_W, R_IN_W];
+        let mut xs = [o.x; 4];
+        for k in 1..4 {
+            xs[k] = xs[k - 1] + widths[k - 1] + R_IN_GAP;
+        }
+        let cap_y = o.y + 6.0;
+        let fy = o.y + R_CAP_H;
+        let caps = ["Retic %", "HCT %", "Gender", "RBC ×10¹²/L"];
+        for (k, c) in caps.iter().enumerate() {
+            col_head(ui, th, pos2(xs[k] + inset, cap_y), Align2::LEFT_CENTER, c, th.muted);
+        }
+        let cell = |k: usize| Rect::from_min_size(pos2(xs[k], fy), vec2(widths[k], CELL_H));
+        let bad = |s: &str| parse_number(s) == Num::Invalid;
+        let inv = bad(&self.r_retic);
+        if field(ui, th, cell(0), Id::new("r-retic"), &mut self.r_retic, "", inv) {
             self.retic_note = None;
         }
-        let inv = parse_number(&self.r_hct) == Num::Invalid;
-        labeled_field(ui, th, pos2(xc(1), o.y), colw, "hct (%)", Id::new("r-hct"), &mut self.r_hct, "e.g. 38", inv);
-        label(ui, th, pos2(xc(2), o.y), "gender");
-        let g_rect = Rect::from_min_size(pos2(xc(2), o.y + LABEL_H + LABEL_GAP), vec2(colw, FIELD_H));
-        self.gender_toggle(ui, th, g_rect);
-        let inv = parse_number(&self.r_rbc) == Num::Invalid;
-        labeled_field(ui, th, pos2(xc(3), o.y), colw, "rbc (×10¹²)", Id::new("r-rbc"), &mut self.r_rbc, "e.g. 4.1", inv);
+        let inv = bad(&self.r_hct);
+        field(ui, th, cell(1), Id::new("r-hct"), &mut self.r_hct, "", inv);
+        self.gender_toggle(ui, th, cell(2));
+        let inv = bad(&self.r_rbc);
+        field(ui, th, cell(3), Id::new("r-rbc"), &mut self.r_rbc, "", inv);
 
-        let mut row_h: f32 = 60.0;
-        if let Some(n) = &self.retic_note {
-            let r = note(ui, th, pos2(xc(0), o.y + 64.0), Align2::LEFT_TOP, n, colw);
-            row_h = row_h.max(r.bottom() - o.y);
+        // Rounding notes hang under the field they describe, one per line.
+        let mut y = fy + CELL_H;
+        // The retic note runs right from its box; the RBC note (last column)
+        // ends flush with its box and grows leftwards, so neither wraps.
+        if let Some(n) = self.retic_note.as_deref() {
+            y = note(ui, th, pos2(xs[0], y + 6.0), Align2::LEFT_TOP, n, iw).bottom();
         }
-        if let Some(n) = &out.rbc_note {
-            let r = note(ui, th, pos2(xc(3), o.y + 64.0), Align2::LEFT_TOP, n, colw);
-            row_h = row_h.max(r.bottom() - o.y);
+        if let Some(n) = out.rbc_note.as_deref() {
+            y = note(ui, th, pos2(xs[3] + R_IN_W, y + 6.0), Align2::RIGHT_TOP, n, xs[3] + R_IN_W - o.x).bottom();
         }
 
-        let mut y = o.y + row_h + 18.0;
+        let mut y = y + 16.0;
         let tiles = [
             Tile { label: "Corrected retic", value: &out.corrected_text, unit: "%", rounded: out.corrected_rounded, note: out.corrected_note.as_deref(), hint: out.corrected_hint.as_deref() },
             Tile { label: "Absolute retic", value: &out.absolute_text, unit: "×10⁹/L", rounded: false, note: out.absolute_note.as_deref(), hint: out.absolute_hint.as_deref() },
@@ -742,7 +827,7 @@ impl App {
             let fg = if active { th.on_accent } else { th.text };
             text(ui, th, half.center(), Align2::CENTER_CENTER, name, Role::SansB, 14.08, fg);
         }
-        p.line_segment([pos2(rect.center().x, rect.top() + 1.0), pos2(rect.center().x, rect.bottom() - 1.0)], Stroke::new(1.0, border));
+        p.line_segment([pos2(rect.center().x, rect.top() + 1.0), pos2(rect.center().x, rect.bottom() - 1.0)], Stroke::new(1.0_f32, border));
         if th.palette == Palette::Cyberpunk {
             cyber_stroke(&p, rect, 4.0, 1.0, border);
         } else {
@@ -750,62 +835,56 @@ impl App {
         }
     }
 
+    /// Keep exactly one spare empty box after the last count (at least
+    /// `MIN_ATTEMPTS` boxes, at most `MAX_ATTEMPTS`), so there is nothing to
+    /// add or remove by hand: typing in the last box opens the next one.
+    fn tidy_attempts(&mut self, ui: &Ui) {
+        let empty = |s: &String| s.trim().is_empty();
+        if self.attempts.len() < MAX_ATTEMPTS && self.attempts.last().is_some_and(|s| !empty(s)) {
+            self.attempts.push(String::new());
+        }
+        while self.attempts.len() > MIN_ATTEMPTS {
+            let n = self.attempts.len();
+            let last_focused = ui.memory(|m| m.has_focus(Id::new(("r-attempt", n - 1))));
+            if empty(&self.attempts[n - 1]) && empty(&self.attempts[n - 2]) && !last_focused {
+                self.attempts.pop();
+            } else {
+                break;
+            }
+        }
+    }
+
     fn helper_body(&mut self, ui: &mut Ui, th: &Theme, iw: f32) {
+        self.tidy_attempts(ui);
         let o = ui.cursor().min;
         let n = self.attempts.len();
+        let inset = cell_inset(th);
+        // A grid of small numbered boxes, four to a row: a count is at most
+        // four digits, so each box is sized for that and no more.
+        let cols = ATTEMPT_COLS.min(((iw + R_IN_GAP) / (ATTEMPT_W + R_IN_GAP)).floor().max(1.0) as usize);
+        let row_h = R_CAP_H + CELL_H + 10.0;
         for i in 0..n {
-            let ry = o.y + i as f32 * 48.0;
-            label(ui, th, pos2(o.x, ry + (FIELD_H - LABEL_H) / 2.0), &format!("Attempt {}", i + 1));
+            let x = o.x + (i % cols) as f32 * (ATTEMPT_W + R_IN_GAP);
+            let ry = o.y + (i / cols) as f32 * row_h;
+            text(ui, th, pos2(x + inset, ry + 6.0), Align2::LEFT_CENTER, &(i + 1).to_string(), Role::Mono, 11.5, th.muted);
             let invalid = parse_number(&self.attempts[i]) == Num::Invalid;
-            let hint = match i {
-                0 => "e.g. 10",
-                1 => "e.g. 8",
-                2 => "e.g. 10",
-                _ => "e.g. 9",
-            };
-            let r = Rect::from_min_size(pos2(o.x + 86.0, ry), vec2(iw - 86.0, FIELD_H));
-            field(ui, th, r, Id::new(("r-attempt", i)), &mut self.attempts[i], hint, invalid);
+            let r = Rect::from_min_size(pos2(x, ry + R_CAP_H), vec2(ATTEMPT_W, CELL_H));
+            field(ui, th, r, Id::new(("r-attempt", i)), &mut self.attempts[i], "", invalid);
         }
-        let mut y = o.y + n as f32 * 48.0 - 8.0 + 12.0;
+        let rows = n.div_ceil(cols);
+        let mut y = o.y + rows as f32 * row_h - 10.0 + 16.0;
 
-        let (mut add, mut remove) = (false, false);
-        let r = Rect::from_min_size(pos2(o.x, y), vec2(iw, 32.0));
-        let mut child = ui.new_child(UiBuilder::new().max_rect(r).layout(Layout::left_to_right(Align::Center)));
-        child.spacing_mut().item_spacing.x = 8.0;
-        if button(&mut child, th, "+ Add attempt", Btn::Mini, n < MAX_ATTEMPTS).clicked() {
-            add = true;
-        }
-        if button(&mut child, th, "− Remove last", Btn::MiniMuted, n > MIN_ATTEMPTS).clicked() {
-            remove = true;
-        }
-        let cnt = format!("{} attempts", n);
-        let cw = text_width(ui, th, &cnt, Role::Sans, 12.16);
-        let used = child.min_rect().width();
-        if used + 8.0 + cw <= iw {
-            text(ui, th, pos2(o.x + iw, y + 16.0), Align2::RIGHT_CENTER, &cnt, Role::Sans, 12.16, th.muted);
-        } else {
-            y += 32.0 + 8.0;
-            text(ui, th, pos2(o.x + iw, y + 8.0), Align2::RIGHT_CENTER, &cnt, Role::Sans, 12.16, th.muted);
-            y -= 16.0;
-        }
-        y += 32.0 + 18.0;
-
-        // average row
-        ui.painter().line_segment([pos2(o.x, y + 0.5), pos2(o.x + iw, y + 0.5)], Stroke::new(1.0, th.line));
+        // average, and the one action: send it to retic %
+        ui.painter().line_segment([pos2(o.x, y + 0.5), pos2(o.x + iw, y + 0.5)], Stroke::new(1.0_f32, sheet_rule(th)));
+        let counted = self.attempts.iter().filter(|s| parse_number(s).ok().is_some()).count();
         let avg = average_attempts(&self.attempts);
         let avg_text = avg.map(|a| format!("{} %", to_fixed(a, 2))).unwrap_or_else(|| "—".into());
-        let need = text_width(ui, th, "avg % retic", Role::Sans, 13.12) + text_width(ui, th, &avg_text, Role::MonoB, 16.0) + text_width(ui, th, "Use as retic %", Role::SansB, 12.8) + 26.0 + 30.0;
-        let stacked = need > iw;
-        let mut row = Rect::from_min_size(pos2(o.x, y + 1.0 + 12.0), vec2(iw, 32.0));
-        if stacked {
-            text(ui, th, pos2(o.x + 1.0, row.top() + 8.0), Align2::LEFT_CENTER, "avg % retic", Role::Sans, 13.12, th.muted);
-            row = row.translate(vec2(0.0, 22.0));
-        } else {
-            text(ui, th, pos2(o.x + 1.0, row.center().y), Align2::LEFT_CENTER, "avg % retic", Role::Sans, 13.12, th.muted);
-        }
+        let row = Rect::from_min_size(pos2(o.x, y + 12.0), vec2(iw, 32.0));
+        let cap = if counted > 0 { format!("Average of {}", counted) } else { "Average".to_string() };
+        text(ui, th, pos2(o.x, row.center().y), Align2::LEFT_CENTER, &cap, Role::Sans, 13.0, th.muted);
         let mut child = ui.new_child(UiBuilder::new().max_rect(row).layout(Layout::right_to_left(Align::Center)));
-        let b = button(&mut child, th, "Use as retic %", Btn::Mini, true);
-        text(ui, th, pos2(b.rect.left() - 10.0, row.center().y), Align2::RIGHT_CENTER, &avg_text, Role::MonoB, 16.0, if avg.is_some() { th.text } else { th.muted });
+        let b = button(&mut child, th, "Use as retic %", Btn::Mini, avg.is_some());
+        text(ui, th, pos2(b.rect.left() - 10.0, row.center().y), Align2::RIGHT_CENTER, &avg_text, Role::MonoB, 16.0, if avg.is_some() { th.text } else { th.line_strong });
         if b.clicked() {
             if let Some(a) = avg {
                 let ar = round2(a);
@@ -813,21 +892,14 @@ impl App {
                 self.retic_note = if is_rounded(a, ar) { Some(format!("2 dp: {} → {}", fmt_raw(a), to_fixed(ar, 2))) } else { None };
             }
         }
-        y = row.bottom() + 12.0;
+        let hint = if n < MAX_ATTEMPTS { "A new box opens when you fill the last one." } else { "Up to 12 attempts." };
+        y = paragraph(ui, th, pos2(o.x, row.bottom() + 12.0), iw, hint, Role::Sans, 12.0, th.muted, 1.35).bottom();
         ui.allocate_rect(Rect::from_min_max(o, pos2(o.x + iw, y)), Sense::hover());
-
-        if add && n < MAX_ATTEMPTS {
-            self.attempts.push(String::new());
-            ui.memory_mut(|m| m.request_focus(Id::new(("r-attempt", n))));
-        }
-        if remove && n > MIN_ATTEMPTS {
-            self.attempts.pop();
-        }
     }
 
     fn calc_card(&mut self, ui: &mut Ui, th: &Theme, pos: Pos2, w: f32) -> f32 {
         let steps = self.build_steps();
-        let opts = CardOpts { title: "Calculations", unit: "updates as you type", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false, status: None };
+        let opts = CardOpts { title: "Calculations", unit: "updates as you type", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false, status: None, collapsed: false };
         let rect = card(ui, th, pos, w, &opts, |ui, iw| {
             let o = ui.cursor().min;
             // Steps wrap into a 4×1, 2×2 or 1×4 grid by the width available;
@@ -906,7 +978,7 @@ fn tile_extra_h(ui: &Ui, th: &Theme, t: &Tile, w: f32) -> f32 {
 /// room). Values are plain ink: they are results, not warnings. Returns height.
 fn result_tiles(ui: &mut Ui, th: &Theme, pos: Pos2, iw: f32, tiles: &[Tile]) -> f32 {
     let gap = 12.0;
-    let side = iw >= 420.0;
+    let side = iw >= 360.0;
     let tw = if side { (iw - gap) / 2.0 } else { iw };
     let base_h = TILE_PAD + 16.0 + 6.0 + 32.0 + TILE_PAD - 4.0;
     let extras: Vec<f32> = tiles.iter().map(|t| tile_extra_h(ui, th, t, tw)).collect();
@@ -1122,7 +1194,7 @@ fn dil_color(th: &Theme, name: &str) -> Color32 {
 
 impl App {
     pub fn dilution_card(&mut self, ui: &mut Ui, th: &Theme, pos: Pos2, w: f32) -> f32 {
-        let opts = CardOpts { title: "Dilution", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false, status: None };
+        let opts = CardOpts { title: "Dilution", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false, status: None, collapsed: false };
         let rect = card(ui, th, pos, w, &opts, |ui, iw| {
             let o = ui.cursor().min;
             let lw = dil_label_w(ui, th);

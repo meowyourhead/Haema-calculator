@@ -6,7 +6,7 @@ use std::sync::Arc;
 pub fn install(ctx: &egui::Context) {
     let mut fd = FontDefinitions::default();
 
-    let mut add = |fd: &mut FontDefinitions, key: &str, data: FontData| {
+    let add = |fd: &mut FontDefinitions, key: &str, data: FontData| {
         fd.font_data.insert(key.to_owned(), Arc::new(data));
     };
 
