@@ -230,14 +230,15 @@ impl eframe::App for App {
             let screen_w = ctx.screen_rect().width();
             egui::SidePanel::right("hbel-source-panel")
                 .resizable(true)
-                .default_width((screen_w * 0.5).max(420.0))
+                // leave the results about 600 pt, give the table the rest
+                .default_width((screen_w - 600.0).min(screen_w * 0.62).max(420.0))
                 .min_width(380.0)
                 .max_width((screen_w - 360.0).max(400.0))
                 .frame(egui::Frame::NONE.fill(th.bg).stroke(Stroke::new(1.0_f32, th.line_strong)))
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().id_salt("hbel-source-scroll").auto_shrink([false, false]).drag_to_scroll(false).show(ui, |ui| {
-                        let o = ui.cursor().min + vec2(20.0, 24.0);
-                        let w = ui.available_width() - 40.0;
+                        let o = ui.cursor().min + vec2(14.0, 24.0);
+                        let w = ui.available_width() - 28.0;
                         let bottom = self.hbel_source(ui, &th, o, w);
                         let top = ui.cursor().min;
                         ui.allocate_rect(Rect::from_min_max(top, pos2(o.x + w, bottom + 40.0)), Sense::hover());

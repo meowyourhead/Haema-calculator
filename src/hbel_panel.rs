@@ -25,6 +25,8 @@ pub struct HbelState {
     form: Option<NewForm>,
     /// Confirmation after saving a new comment.
     saved: Option<String>,
+    /// Rows highlighted in the source sheet last frame (scroll when it changes).
+    last_highlight: Vec<u8>,
 }
 
 /// The "Add a new comment" form.
@@ -258,8 +260,17 @@ impl App {
             y = paragraph(ui, th, pos2(origin.x, y), w, "No comments match.", Role::Sans, 14.0, th.muted, 1.45).bottom();
         } else {
             let n = format!("{} of {} comments · click a code to open it in the results view", shown.len(), lib.entries.len());
+            let n = format!("{} · highlighted rows fit the entered results", n);
             y = text(ui, th, pos2(origin.x, y), Align2::LEFT_TOP, &n, Role::Sans, 12.5, th.muted).bottom() + 8.0;
-            y = source_table(ui, th, pos2(origin.x, y), w, &shown, copied, &mut copy_req, &mut view_req);
+            let hl = highlight_codes(&lib, &self.hbel.inputs, self.hbel.viewing());
+            let (bottom, first) = source_table(ui, th, pos2(origin.x, y), w, &shown, &hl, copied, &mut copy_req, &mut view_req);
+            y = bottom;
+            if hl != self.hbel.last_highlight {
+                if let Some(r) = first {
+                    ui.scroll_to_rect(r, Some(Align::Center));
+                }
+                self.hbel.last_highlight = hl;
+            }
         }
         if let Some(code) = copy_req {
             self.hbel_copy(ui, code);
@@ -282,10 +293,10 @@ impl App {
             if button(ui, th, "Clear", Btn::Secondary, true).clicked() {
                 clear = true;
             }
-            if button(ui, th, if form_open { "Cancel new comment" } else { "Add new comment" }, Btn::Secondary, true).clicked() {
+            if button(ui, th, if form_open { "Cancel new" } else { "New comment" }, Btn::Secondary, true).on_hover_text("Add a new comment for a case no comment fits").clicked() {
                 open_form = true;
             }
-            let src_label = if self.hbel.source_open { "Hide source sheet" } else { "Show source sheet" };
+            let src_label = if self.hbel.source_open { "Hide sheet" } else { "Source sheet" };
             if button(ui, th, src_label, Btn::Secondary, true).clicked() {
                 open_src = true;
             }
@@ -305,7 +316,7 @@ impl App {
             y = r.bottom() + 14.0;
         }
 
-        let wide = w >= 900.0;
+        let wide = false; // suggested comment always sits below the results
         let gap = 16.0;
         let (rw, sw) = if wide { ((w - gap) * 0.56, (w - gap) * 0.44) } else { (w, w) };
         let opts = CardOpts { title: "Results", unit: "blank rows match anything", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0 };
@@ -626,22 +637,33 @@ fn entry_block(ui: &mut Ui, th: &Theme, x: f32, y: f32, w: f32, e: &Entry, ev: O
     y
 }
 
-/// Sheet columns shown in the source table: (sheet column, minimum width).
+/// Sheet columns shown in the source table: (sheet column, width).
 pub(crate) const TABLE_COLS: [(&str, f32); 8] = [
-    ("A2", 104.0),
-    ("F", 92.0),
-    ("Hgb", 94.0),
-    ("RBC indices", 124.0),
-    ("C window", 70.0),
-    ("S window", 70.0),
-    ("Fe", 86.0),
-    ("HbH inclusion body", 96.0),
+    ("A2", 62.0),
+    ("F", 52.0),
+    ("Hgb", 52.0),
+    ("RBC indices", 64.0),
+    ("C window", 34.0),
+    ("S window", 34.0),
+    ("Fe", 46.0),
+    ("HbH inclusion body", 50.0),
 ];
-const CODE_COL: f32 = 66.0;
-const COMMENT_COL: f32 = 262.0;
-const NOTES_COL: f32 = 210.0;
-const CELL_PAD: f32 = 10.0;
-const CELL_FONT: f32 = 12.8;
+/// Short headers so the narrow columns stay readable.
+const TABLE_HEADS: [&str; 8] = ["A2", "F", "Hgb", "RBC indices", "C", "S", "Fe", "HbH"];
+const COMMENT_MIN: f32 = 148.0;
+const NOTES_COL: f32 = 230.0;
+const CELL_PAD: f32 = 5.0;
+const CELL_FONT: f32 = 11.4;
+const COMMENT_FONT: f32 = 12.4;
+const CODE_LINE: f32 = 24.0;
+
+/// Codes to highlight in the source sheet: the viewed code, else every top fit.
+pub(crate) fn highlight_codes(lib: &Library, inputs: &Inputs, viewing: Option<u8>) -> Vec<u8> {
+    if let Some(c) = viewing {
+        return vec![c];
+    }
+    suggest(lib, inputs).top.iter().map(|e| e.code).collect()
+}
 
 /// The sheet's text for one column; named criteria sets (code 12) are prefixed and stacked.
 pub(crate) fn cell_text(e: &Entry, col: &str) -> String {
@@ -680,48 +702,53 @@ pub(crate) fn notes_text(e: &Entry) -> String {
 /// Layout of a comment cell: where the copy button goes (left-middle, relative to the
 /// cell's text origin) and the cell's text height including the button.
 fn comment_cell(ui: &Ui, th: &Theme, width: f32, comment: &str, copy_label: &str) -> (Pos2, f32) {
-    let (end, h) = text_end(ui, th, width, comment, Role::Serif, 13.6, 1.4);
+    let (end, h) = text_end(ui, th, width, comment, Role::Serif, COMMENT_FONT, 1.35);
     let bw = copy_button_width(ui, th, copy_label);
-    if end.x + 10.0 + bw <= width {
-        (pos2(end.x + 10.0, end.y), h)
+    if end.x + 8.0 + bw <= width {
+        (pos2(end.x + 8.0, end.y), h)
     } else {
-        (pos2(0.0, h + 11.0), h + 22.0)
+        (pos2(0.0, h + 10.0), h + 20.0)
     }
 }
 
-/// The source sheet as a table (scrolls sideways when narrow). Returns the bottom y.
+/// The source sheet as a table. Comment and the sheet columns fit the visible width;
+/// only "Notes & links" sits past the right edge (scroll sideways to read it).
+/// Rows whose code is in `highlight` are highlighted. Returns the bottom y and the
+/// first highlighted row's rect.
 #[allow(clippy::too_many_arguments)]
-fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], copied: Option<u8>, copy_req: &mut Option<u8>, view_req: &mut Option<u8>) -> f32 {
-    // column x positions: spare width goes to Comment and Notes
-    let min_w = CODE_COL + COMMENT_COL + NOTES_COL + TABLE_COLS.iter().map(|c| c.1).sum::<f32>();
-    let tw = w.max(min_w);
-    let extra = tw - min_w;
-    let mut widths = vec![CODE_COL, COMMENT_COL + extra * 0.6];
-    widths.extend(TABLE_COLS.iter().map(|c| c.1));
-    widths.push(NOTES_COL + extra * 0.4);
-    let heads: Vec<&str> = ["Code", "Comment"].into_iter().chain(TABLE_COLS.iter().map(|c| c.0)).chain(["Notes & links"]).collect();
-
-    // measure rows
+fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], highlight: &[u8], copied: Option<u8>, copy_req: &mut Option<u8>, view_req: &mut Option<u8>) -> (f32, Option<Rect>) {
+    // spare width: up to 60% widens the sheet columns (to at most 2x), the rest goes to Comment
+    let fixed: f32 = TABLE_COLS.iter().map(|c| c.1).sum();
+    let spare = (w - fixed - COMMENT_MIN).max(0.0);
+    let grow = (spare * 0.6 / fixed).min(1.0);
+    let cols: Vec<f32> = TABLE_COLS.iter().map(|c| c.1 * (1.0 + grow)).collect();
+    let mut widths = vec![(w - cols.iter().sum::<f32>()).max(COMMENT_MIN)];
+    widths.extend(cols);
+    widths.push(NOTES_COL);
+    let tw: f32 = widths.iter().sum();
+    let heads: Vec<&str> = std::iter::once("Comment").chain(TABLE_HEADS).chain(["Notes & links →"]).collect();
     let wrap = |i: usize| widths[i] - CELL_PAD * 2.0;
-    let link_h = 20.0;
+    let last = widths.len() - 1;
+    let link_h = 18.0;
+
     let row_h: Vec<f32> = rows
         .iter()
         .map(|e| {
-            let mut h = CHIP_H + if e.source.is_some() { 24.0 } else { 0.0 };
-            h = h.max(comment_cell(ui, th, wrap(1), &e.comment, "Copied").1);
+            let mut h = CODE_LINE + comment_cell(ui, th, wrap(0), &e.comment, "Copied").1;
             for (k, (col, _)) in TABLE_COLS.iter().enumerate() {
-                h = h.max(paragraph_height(ui, th, wrap(k + 2), &cell_text(e, col), Role::Sans, CELL_FONT, 1.4));
+                h = h.max(paragraph_height(ui, th, wrap(k + 1), &cell_text(e, col), Role::Sans, CELL_FONT, 1.35));
             }
             let notes = notes_text(e);
-            let nh = if notes.is_empty() { 0.0 } else { paragraph_height(ui, th, wrap(widths.len() - 1), &notes, Role::Sans, 12.2, 1.4) + 4.0 };
+            let nh = if notes.is_empty() { 0.0 } else { paragraph_height(ui, th, wrap(last), &notes, Role::Sans, 11.5, 1.35) + 4.0 };
             h.max(nh + e.links.len() as f32 * link_h) + CELL_PAD * 2.0
         })
         .collect();
-    let head_h = heads.iter().enumerate().map(|(i, h)| paragraph_height(ui, th, wrap(i), h, Role::SansB, 12.5, 1.3)).fold(0.0_f32, f32::max) + 16.0;
+    let head_h = heads.iter().enumerate().map(|(i, h)| paragraph_height(ui, th, wrap(i), h, Role::SansB, 11.5, 1.25)).fold(0.0_f32, f32::max) + 12.0;
     let table_h = head_h + row_h.iter().sum::<f32>();
-    let scroll_pad = if tw > w { 14.0 } else { 0.0 };
+    let area = Rect::from_min_size(pos, vec2(w, table_h + 14.0));
+    let mut first_hl: Option<Rect> = None;
+    let hl_bar = if th.palette == crate::theme::Palette::Genshin { th.gold } else { th.accent };
 
-    let area = Rect::from_min_size(pos, vec2(w, table_h + scroll_pad));
     ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
         egui::ScrollArea::horizontal().id_salt("hbel-table").auto_shrink([false, true]).drag_to_scroll(false).show(ui, |ui| {
             let o = ui.cursor().min;
@@ -729,72 +756,82 @@ fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], cop
             let frame = Rect::from_min_size(o, vec2(tw, table_h));
             let r = th.radius_lg;
             p.rect_filled(frame, cr(r), th.surface);
-            // header
             let head = Rect::from_min_size(o, vec2(tw, head_h));
             p.with_clip_rect(head).rect_filled(frame, cr(r), th.surface2);
             let mut x = o.x;
             for (i, h) in heads.iter().enumerate() {
-                paragraph(ui, th, pos2(x + CELL_PAD, o.y + 8.0), wrap(i), h, Role::SansB, 12.5, th.muted, 1.3);
+                let c = if i == last { th.muted } else { th.text };
+                paragraph(ui, th, pos2(x + CELL_PAD, o.y + 6.0), wrap(i), h, Role::SansB, 11.5, c, 1.25);
                 x += widths[i];
             }
             let mut y = o.y + head_h;
             for (ri, e) in rows.iter().enumerate() {
                 let rh = row_h[ri];
-                if ri % 2 == 1 {
-                    p.rect_filled(Rect::from_min_size(pos2(o.x, y), vec2(tw, rh)), 0.0, rgba(th.surface2, 0.55));
+                let row_rect = Rect::from_min_size(pos2(o.x, y), vec2(tw, rh));
+                if highlight.contains(&e.code) {
+                    p.rect_filled(row_rect, 0.0, rgba(hl_bar, if th.dark { 0.22 } else { 0.14 }));
+                    p.rect_filled(Rect::from_min_size(row_rect.min, vec2(4.0, rh)), 0.0, hl_bar);
+                    if first_hl.is_none() {
+                        first_hl = Some(row_rect);
+                    }
+                } else if ri % 2 == 1 {
+                    p.rect_filled(row_rect, 0.0, rgba(th.surface2, 0.55));
                 }
                 p.line_segment([pos2(o.x, y), pos2(o.x + tw, y)], Stroke::new(1.0_f32, th.line));
                 let top = y + CELL_PAD;
-                let mut x = o.x;
-                // code: chip opens it in the results view
-                let (_, resp) = chip_button(ui, th, pos2(x + CELL_PAD, top), &e.code.to_string(), true, Id::new(("hbel-src-code", e.code)));
-                if resp.on_hover_text("Show in the results view").clicked() {
+                let x0 = o.x + CELL_PAD + 2.0;
+                // code badge (click: show in the results view) + "Added" badge
+                let cb = chip(ui, th, pos2(x0, top), Align2::LEFT_TOP, &format!("Code {}", e.code), Role::MonoB, 11.5, th.accent_dark, th.accent_soft, Some((1.0, th.accent)), vec2(7.0, 1.5), pill());
+                let resp = ui.interact(cb, Id::new(("hbel-src-code", e.code)), Sense::click()).on_hover_text("Show in the results view");
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if resp.clicked() {
                     *view_req = Some(e.code);
                 }
                 if e.source.is_some() {
-                    chip(ui, th, pos2(x + CELL_PAD, top + CHIP_H + 6.0), Align2::LEFT_TOP, "Added", Role::SansB, 10.5, th.ok, th.ok_bg, None, vec2(6.0, 1.0), pill());
+                    chip(ui, th, pos2(cb.right() + 6.0, top + 1.0), Align2::LEFT_TOP, "Added", Role::SansB, 10.5, th.ok, th.ok_bg, None, vec2(6.0, 1.0), pill());
                 }
-                x += widths[0];
                 // comment (selectable) with the copy button after its last word
-                let cpos = pos2(x + CELL_PAD, top);
-                selectable_paragraph(ui, th, cpos, wrap(1), &e.comment, Role::Serif, 13.6, th.text, 1.4);
+                let cpos = pos2(x0, top + CODE_LINE);
+                selectable_paragraph(ui, th, cpos, wrap(0), &e.comment, Role::Serif, COMMENT_FONT, th.text, 1.35);
                 let cl = if copied == Some(e.code) { "Copied" } else { "Copy" };
-                let (at, _) = comment_cell(ui, th, wrap(1), &e.comment, cl);
+                let (at, _) = comment_cell(ui, th, wrap(0), &e.comment, cl);
                 if copy_button(ui, th, cpos + at.to_vec2(), cl, Id::new(("hbel-src-copy", e.code))).clicked() {
                     *copy_req = Some(e.code);
                 }
-                x += widths[1];
+                let mut x = o.x + widths[0];
                 for (k, (col, _)) in TABLE_COLS.iter().enumerate() {
                     let t = cell_text(e, col);
                     if t.is_empty() {
                         text(ui, th, pos2(x + CELL_PAD, top), Align2::LEFT_TOP, "—", Role::Sans, CELL_FONT, th.muted);
                     } else {
-                        selectable_paragraph(ui, th, pos2(x + CELL_PAD, top), wrap(k + 2), &t, Role::Sans, CELL_FONT, th.text, 1.4);
+                        selectable_paragraph(ui, th, pos2(x + CELL_PAD, top), wrap(k + 1), &t, Role::Sans, CELL_FONT, th.text, 1.35);
                     }
-                    x += widths[k + 2];
+                    x += widths[k + 1];
                 }
                 let notes = notes_text(e);
                 let mut ny = top;
                 if !notes.is_empty() {
-                    ny = selectable_paragraph(ui, th, pos2(x + CELL_PAD, top), wrap(widths.len() - 1), &notes, Role::Sans, 12.2, th.text, 1.4).bottom() + 4.0;
+                    ny = selectable_paragraph(ui, th, pos2(x + CELL_PAD, top), wrap(last), &notes, Role::Sans, 11.5, th.text, 1.35).bottom() + 4.0;
                 }
                 for l in &e.links {
-                    ny = link(ui, th, pos2(x + CELL_PAD, ny), l, wrap(widths.len() - 1)).bottom() + 4.0;
+                    ny = link(ui, th, pos2(x + CELL_PAD, ny), l, wrap(last)).bottom() + 4.0;
                 }
                 y += rh;
             }
-            // column rules and frame
             let mut x = o.x;
-            for wd in &widths[..widths.len() - 1] {
+            for (i, wd) in widths[..last].iter().enumerate() {
                 x += wd;
-                p.line_segment([pos2(x, o.y), pos2(x, o.y + table_h)], Stroke::new(1.0_f32, rgba(th.line, 0.6)));
+                let c = if i == last - 1 { th.line_strong } else { rgba(th.line, 0.6) };
+                p.line_segment([pos2(x, o.y), pos2(x, o.y + table_h)], Stroke::new(1.0_f32, c));
             }
             stroke_in(&p, frame, r, if th.palette == crate::theme::Palette::Pokemon { 2.0 } else { 1.0 }, th.line);
             ui.allocate_rect(frame, Sense::hover());
         });
     });
     ui.allocate_rect(area, Sense::hover());
-    area.bottom()
+    (area.bottom(), first_hl)
 }
 
 /// "● Label   value" criteria line. The dot shows match (ok), conflict (bad) or nothing.
@@ -872,5 +909,15 @@ mod tests {
         assert_eq!(s.viewing(), Some(27));
         assert!(s.lib().entries.iter().any(|e| e.code == 27 && e.comment == "A brand new pattern."));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn highlight_follows_suggestion() {
+        let lib = library();
+        let mut i = Inputs { hba2: "2.8".into(), hbf: "3".into(), ..Default::default() };
+        assert_eq!(highlight_codes(lib, &i, None), vec![17, 21, 23]);
+        assert_eq!(highlight_codes(lib, &i, Some(7)), vec![7]);
+        i.clear();
+        assert!(highlight_codes(lib, &i, None).is_empty());
     }
 }
