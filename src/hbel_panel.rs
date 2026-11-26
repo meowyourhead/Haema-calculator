@@ -699,18 +699,6 @@ pub(crate) fn notes_text(e: &Entry) -> String {
     out.join("\n")
 }
 
-/// Layout of a comment cell: where the copy button goes (left-middle, relative to the
-/// cell's text origin) and the cell's text height including the button.
-fn comment_cell(ui: &Ui, th: &Theme, width: f32, comment: &str, copy_label: &str) -> (Pos2, f32) {
-    let (end, h) = text_end(ui, th, width, comment, Role::Serif, COMMENT_FONT, 1.35);
-    let bw = copy_button_width(ui, th, copy_label);
-    if end.x + 8.0 + bw <= width {
-        (pos2(end.x + 8.0, end.y), h)
-    } else {
-        (pos2(0.0, h + 10.0), h + 20.0)
-    }
-}
-
 /// The source sheet as a table. Comment and the sheet columns fit the visible width;
 /// only "Notes & links" sits past the right edge (scroll sideways to read it).
 /// Rows whose code is in `highlight` are highlighted. Returns the bottom y and the
@@ -734,7 +722,7 @@ fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], hig
     let row_h: Vec<f32> = rows
         .iter()
         .map(|e| {
-            let mut h = CODE_LINE + comment_cell(ui, th, wrap(0), &e.comment, "Copied").1;
+            let mut h = CODE_LINE + paragraph_height(ui, th, wrap(0), &e.comment, Role::Serif, COMMENT_FONT, 1.35);
             for (k, (col, _)) in TABLE_COLS.iter().enumerate() {
                 h = h.max(paragraph_height(ui, th, wrap(k + 1), &cell_text(e, col), Role::Sans, CELL_FONT, 1.35));
             }
@@ -789,17 +777,17 @@ fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], hig
                 if resp.clicked() {
                     *view_req = Some(e.code);
                 }
+                let mut bx = cb.right() + 8.0;
                 if e.source.is_some() {
-                    chip(ui, th, pos2(cb.right() + 6.0, top + 1.0), Align2::LEFT_TOP, "Added", Role::SansB, 10.5, th.ok, th.ok_bg, None, vec2(6.0, 1.0), pill());
+                    bx = chip(ui, th, pos2(cb.right() + 6.0, top + 1.0), Align2::LEFT_TOP, "Added", Role::SansB, 10.5, th.ok, th.ok_bg, None, vec2(6.0, 1.0), pill()).right() + 8.0;
                 }
-                // comment (selectable) with the copy button after its last word
-                let cpos = pos2(x0, top + CODE_LINE);
-                selectable_paragraph(ui, th, cpos, wrap(0), &e.comment, Role::Serif, COMMENT_FONT, th.text, 1.35);
+                // copy button next to the code label
                 let cl = if copied == Some(e.code) { "Copied" } else { "Copy" };
-                let (at, _) = comment_cell(ui, th, wrap(0), &e.comment, cl);
-                if copy_button(ui, th, cpos + at.to_vec2(), cl, Id::new(("hbel-src-copy", e.code))).clicked() {
+                if copy_button(ui, th, pos2(bx, cb.center().y), cl, Id::new(("hbel-src-copy", e.code))).clicked() {
                     *copy_req = Some(e.code);
                 }
+                // comment (selectable)
+                selectable_paragraph(ui, th, pos2(x0, top + CODE_LINE), wrap(0), &e.comment, Role::Serif, COMMENT_FONT, th.text, 1.35);
                 let mut x = o.x + widths[0];
                 for (k, (col, _)) in TABLE_COLS.iter().enumerate() {
                     let t = cell_text(e, col);
