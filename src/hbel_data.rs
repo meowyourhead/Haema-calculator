@@ -287,6 +287,8 @@ pub fn parse(src: &str) -> Result<Library, String> {
     let mut cur: Option<Entry> = None;
     let mut cur_start = 0;
     let mut section = Section::None;
+    // Some Windows editors start UTF-8 files with a byte-order mark.
+    let src = src.strip_prefix('\u{feff}').unwrap_or(src);
     for (i, raw) in src.lines().enumerate() {
         let n = i + 1;
         let line = raw.trim_end_matches('\r').trim();
@@ -657,5 +659,11 @@ mod tests {
     fn empty_query_all() {
         assert_eq!(visible(library(), "", None).len(), 25);
         assert_eq!(visible(library(), "   ", None).len(), 25);
+    }
+
+    #[test]
+    fn bom_is_ignored() {
+        let lib = parse(&format!("\u{feff}{}", MINI)).unwrap();
+        assert_eq!(lib.entries[0].code, 16);
     }
 }

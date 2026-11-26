@@ -312,7 +312,9 @@ fn results_body(ui: &mut Ui, th: &Theme, iw: f32, inputs: &mut Inputs) {
             let invalid = inputs.number(row) == NumState::Invalid;
             let rect = Rect::from_min_size(pos2(o.x, cap.bottom() + 6.0), vec2(NUM_W, FIELD_H - 4.0));
             let value = if row == Row::Hba2 { &mut inputs.hba2 } else { &mut inputs.hbf };
-            text_field(ui, th, rect, id, value, "type %", invalid);
+            if text_field(ui, th, rect, id, value, "type %", invalid) {
+                inputs.number_edited(row);
+            }
             left_bottom = rect.bottom();
             if invalid {
                 let r = text(ui, th, pos2(o.x, rect.bottom() + 3.0), Align2::LEFT_TOP, "0–100, use a dot", Role::Sans, 11.0, th.bad);
