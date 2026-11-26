@@ -19,7 +19,7 @@
 #     hba2, hbf          ranges in %:  A..B   A..<B   >A..<B   >A   <B
 #     peak               normal, split, degraded
 #     hb                 normal, low, markedly-low
-#     indices            normal, micro-hypo, marked
+#     indices            normal, micro-hypo
 #     film               target, sphero, sickle, poikilo
 #     c, s               neg, present
 #     hbh                not-detected, detected
@@ -145,7 +145,7 @@ hba2: <2.2
 peak: normal (assumed)
 hbf: 92..95
 hb: markedly-low
-indices: micro-hypo, marked
+indices: micro-hypo
 film: poikilo
 c: neg
 s: neg
@@ -404,7 +404,7 @@ hba2: 30..70
 peak: normal (assumed)
 hbf: 10..40
 hb: markedly-low
-indices: marked
+indices: micro-hypo
 c: neg (assumed)
 s: neg (assumed)
 hbh: not-detected

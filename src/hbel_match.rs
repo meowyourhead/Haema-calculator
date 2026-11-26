@@ -287,7 +287,7 @@ mod tests {
             (4, "hba2=2.8 hbf=0.5 hb=low indices=micro-hypo c=neg s=neg hbh=detected"),
             (5, "hba2=5.2 hbf=2 hb=low indices=micro-hypo c=neg s=neg hbh=not-detected"),
             (6, "hba2=5.5 hbf=20 hb=low indices=micro-hypo"),
-            (7, "hba2=1.5 hbf=94 hb=markedly-low indices=marked"),
+            (7, "hba2=1.5 hbf=94 hb=markedly-low indices=micro-hypo"),
             (8, "hba2=15 peak=degraded hbh=not-detected"),
             (9, "c=present s=neg peak=normal"),
             (10, "s=present c=neg film=sickle peak=normal"),
@@ -305,7 +305,7 @@ mod tests {
             (21, "hba2=2.8 hbf=3 hb=low indices=micro-hypo"),
             (22, "peak=split hbf=0.5 hb=normal indices=normal hbh=not-detected"),
             (23, "hba2=2.8 hbf=3 hb=low indices=normal"),
-            (24, "hba2=45 hbf=25 hb=markedly-low indices=marked"),
+            (24, "hba2=45 hbf=25 hb=markedly-low indices=micro-hypo"),
             (25, "hba2=1.8 hbf=0.5 hb=low indices=normal"),
             (26, "hba2=15 peak=degraded hbh=detected"),
         ];
