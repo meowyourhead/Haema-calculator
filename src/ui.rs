@@ -547,19 +547,6 @@ pub fn selectable_paragraph(ui: &mut Ui, th: &Theme, pos: Pos2, width: f32, s: &
     rect
 }
 
-/// Position (relative to the paragraph's top-left) of the end of its last line,
-/// as (x of the line end, y of the line's vertical centre), plus the paragraph height.
-pub fn text_end(ui: &Ui, th: &Theme, width: f32, s: &str, role: Role, size: f32, line: f32) -> (Pos2, f32) {
-    let mut job = LayoutJob::single_section(
-        s.to_owned(),
-        TextFormat { font_id: th.font(role, size), color: Color32::WHITE, line_height: Some(size * line), ..Default::default() },
-    );
-    job.wrap.max_width = width;
-    let g = ui.fonts(|f| f.layout_job(job));
-    let end = g.rows.last().map_or(pos2(0.0, size * line / 2.0), |r| pos2(r.rect.right(), r.rect.center().y));
-    (end, g.size().y)
-}
-
 const COPY_ICON_W: f32 = 13.0;
 
 /// Width of a `copy_button` with this label.
