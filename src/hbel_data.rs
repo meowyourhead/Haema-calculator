@@ -249,6 +249,8 @@ pub struct Entry {
     pub examples: Vec<String>,
     pub links: Vec<Link>,
     pub references: Vec<String>,
+    /// File name in the shared "6. HBEL" folder for comments added by users; None for built-in ones.
+    pub source: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]

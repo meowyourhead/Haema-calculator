@@ -3,6 +3,7 @@
 mod app;
 mod chrome;
 mod fonts;
+mod hbel_custom;
 mod hbel_data;
 mod hbel_match;
 mod hbel_panel;

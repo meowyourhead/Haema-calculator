@@ -36,6 +36,11 @@ See `RELEASING.md` for the commit, push and release rules used by this project.
   comment with its criteria, remarks, example cases and links; **View source sheet** shows the
   original spreadsheet content with search and filters. Comments live in
   `assets/hbel_comments.txt` (edit, then rebuild). Links open in the default browser.
+- **Add new comment** (HBEL): saves a comment for a new kind of case, using the results entered
+  as its criteria, into a shared **`6. HBEL`** folder next to the `.exe` (one `HBEL-<code>.txt`
+  file per comment, codes from 27). The app asks before creating the folder. Every PC that runs
+  the app from that location sees the added comments; **Reload** in the source sheet re-reads
+  them, and deleting a file removes its comment.
 - Three palettes — **Default**, **Genshin**, **Pokémon** — each with light and dark variants.
   Genshin uses a soft, pre-blurred world backdrop (baked from the saved Game UI Database
   reference), gold hairlines and ivory/gold pill controls. Pokémon follows the Let's Go,
