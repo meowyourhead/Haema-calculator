@@ -1,0 +1,3 @@
+# HBEL comments (temporary)
+[1]
+comment: HbA present. No abnormal haemoglobin detected.
