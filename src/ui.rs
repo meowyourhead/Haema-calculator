@@ -544,9 +544,9 @@ pub fn copy_button(ui: &mut Ui, th: &Theme, left_mid: Pos2, label: &str, id: Id)
     // two overlapping sheets
     let back = Rect::from_min_size(pos2(rect.left() + 3.5, rect.center().y - 6.5), vec2(8.5, 10.0));
     let front = Rect::from_min_size(pos2(rect.left() + 0.5, rect.center().y - 3.5), vec2(8.5, 10.0));
-    p.rect_stroke(back, cr(2.0), Stroke::new(1.3, c), StrokeKind::Middle);
+    p.rect_stroke(back, cr(2.0), Stroke::new(1.3_f32, c), StrokeKind::Middle);
     p.rect_filled(front, cr(2.0), th.surface);
-    p.rect_stroke(front, cr(2.0), Stroke::new(1.3, c), StrokeKind::Middle);
+    p.rect_stroke(front, cr(2.0), Stroke::new(1.3_f32, c), StrokeKind::Middle);
     text(ui, th, pos2(rect.left() + COPY_ICON_W + 5.0, rect.center().y), Align2::LEFT_CENTER, label, Role::SansB, 12.0, c);
     resp
 }
