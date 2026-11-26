@@ -139,16 +139,31 @@ Each comment has a criterion (or none) per row. For every row the user has fille
 For the Film row, a comment's film criterion matches if any selected film chip is in
 it; film never causes a conflict (it only supports).
 
-- **Fits:** comments with zero conflicts and at least one match, ranked by number of
-  matches (high first), then code number.
+- **Key criteria.** Some criteria define a comment and must be *entered and matched*
+  for it to fit at all (blank does not count): 4 and 26 HbH = Detected; 8, 18 and 26
+  peak = Degradation / co-eluting; 9 C = Present; 10 S = Present; 11 C and S = Present;
+  15 HbA1c = High; 22 peak = Split. Without this, e.g. code 15 would tie with 17 every
+  time HbA1c is left blank. *(Designer's call.)*
+- **Fits:** comments with zero conflicts, all key criteria met and at least one match,
+  ranked by number of matches (high first), then code number.
 - **Suggested comment:** the top fit. If two or more fits share the top match count,
   the card says "**N comments fit equally well**" and shows each in full, rather than
   picking one.
-- **Also possible:** up to 3 comments with exactly one conflict (or lower-ranked fits),
-  each with the single difference that would make it the suggestion, e.g.
-  "Code 15 — if HbA1c: High".
+- **Also possible:** up to 3 entries: first the remaining fits (ties beyond those shown,
+  then lower-ranked fits), then comments with exactly one conflict or one unmet key
+  criterion. Each hint names only **that comment's own criteria** — the conflicting one
+  ("Code 6 — needs Hb: Low"), or for a fit, the criteria it has that are still blank
+  ("Code 21 — also expects Hb: Low, Indices: Micro/Hypo"). If a fit has no such
+  criterion, no hint is shown. *(Designer's call.)*
 - Nothing entered → the card shows a short prompt ("Enter results on the left").
   Entries but no fit → "No comment fits exactly" plus the near misses.
+- **Range end points.** The sheet's ranges are inclusive at both ends as written
+  (HbF 0.1–5 includes 5; 5–50 includes 5). A typed number on a shared end point
+  (e.g. HbF 5.0 → codes 5 and 6) therefore fits both and is shown as a tie. A chip
+  matches a criterion range only if they overlap by more than a single point (so the
+  "5–50" chip does not match code 5's 0.1–5). Values in gaps between the sheet's
+  ranges (e.g. HbA2 8–10) match no HbA2 criterion and show as near misses.
+  *(Designer's call; see fact-check note 8.)*
 - Code 12 has two criteria sets (homozygous, heterozygous); it is evaluated with both
   and the better one is used. The card says which set matched.
 
@@ -211,10 +226,12 @@ criteria list. Assumptions (builder's/designer's call, flagged for review):
 `*` = assumed (A1–A9), shown as *(assumed)* in the app. `—` = no criterion.
 
 Sanity behaviour this produces (to be covered by tests): 26 beats 8 when HbH is
-Detected; 8 wins when HbH is Not detected. 20 beats 16 once HbF is raised. With
-HbA2 and HbF slightly raised: Hb and indices normal → 17 (15 ties only if HbA1c is
-left blank — shown as "fit equally well"; HbA1c High → 15); Hb and indices low → 21;
-Hb/indices not entered → 17, 21 and 23 are all shown, with the hints that split them.
+Detected; 8 wins when HbH is Not detected. With **borderline HbA2** (3.5–3.9): HbF
+normal → 16; HbF slightly raised → 20. With **normal HbA2 and slightly raised HbF**:
+Hb and indices normal → 17 (HbA1c High → 15 instead, as 15 then has more matches);
+Hb low and indices micro/hypo → 21; Hb low but indices normal → 23; Hb and indices
+not entered → 17, 21 and 23 tie, with 17's and 21's Hb/indices hints shown.
+HbA2 5 % and HbF exactly 5.0 with Hb low and micro/hypo indices → 5 and 6 tie.
 
 ### 5.5 Suggested-comment card content
 
