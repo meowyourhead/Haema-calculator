@@ -1,6 +1,6 @@
 //! HBEL tab: results view (chips → suggested comment) and source sheet view.
 use crate::app::App;
-use crate::hbel_data::{library, Entry, Group, Link, Row, ROWS};
+use crate::hbel_data::{library, visible, Entry, Group, Link, Row, GROUPS, ROWS};
 use crate::hbel_match::{describe, hint, row_name, suggest, Eval, Inputs, NumState, Outcome, State};
 use crate::panels::toolbar;
 use crate::theme::{rgba, Role, Theme};
@@ -94,18 +94,100 @@ fn button_at(ui: &mut Ui, th: &Theme, right_top: Pos2, label_s: &str, kind: Btn)
 
 impl App {
     pub fn hbel_panel(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
-        self.hbel_results(ui, th, origin, w)
+        if self.hbel.source_open {
+            self.hbel_source(ui, th, origin, w)
+        } else {
+            self.hbel_results(ui, th, origin, w)
+        }
+    }
+
+    /// Copy feedback: the code whose Copy button should read "Copied".
+    fn hbel_copied(&self, ui: &Ui) -> Option<u8> {
+        let now = ui.input(|i| i.time);
+        let c = self.hbel.copied.filter(|(_, t)| now - t < 1.5).map(|(c, _)| c);
+        if c.is_some() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        c
+    }
+
+    fn hbel_copy(&mut self, ui: &Ui, code: u8) {
+        ui.ctx().copy_text(entry(code).comment.clone());
+        self.hbel.copied = Some((code, ui.input(|i| i.time)));
+    }
+
+    fn hbel_source(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
+        // header: back button, search, filters
+        let back_r = Rect::from_min_size(origin, vec2(220.0, 36.0));
+        let mut child = ui.new_child(UiBuilder::new().max_rect(back_r).layout(Layout::left_to_right(Align::Min)));
+        if button(&mut child, th, "← Back to results", Btn::Secondary, true).clicked() {
+            self.hbel.source_open = false;
+        }
+        let bw = child.min_rect().width();
+        let sx = origin.x + bw + 14.0;
+        let sw = (w - bw - 14.0).min(420.0);
+        let sr = Rect::from_min_size(pos2(sx, origin.y - 2.0), vec2(sw, FIELD_H));
+        text_field(ui, th, sr, Id::new("hbel-search"), &mut self.hbel.search, "Search comments, criteria, sample IDs…", false);
+
+        let mut y = origin.y + FIELD_H + 14.0;
+        let mut x = origin.x;
+        let mut pick: Option<Option<Group>> = None;
+        let filters: Vec<(Option<Group>, &str)> = std::iter::once((None, "All")).chain(GROUPS.iter().map(|g| (Some(*g), g.label()))).collect();
+        for (i, (g, name)) in filters.iter().enumerate() {
+            let cw = chip_button_width(ui, th, name);
+            if x > origin.x && x + cw > origin.x + w {
+                x = origin.x;
+                y += CHIP_H + CHIP_GAP;
+            }
+            let (r, resp) = chip_button(ui, th, pos2(x, y), name, self.hbel.filter == *g, Id::new(("hbel-filter", i)));
+            if resp.clicked() {
+                pick = Some(*g);
+            }
+            x = r.right() + CHIP_GAP;
+        }
+        if let Some(g) = pick {
+            self.hbel.filter = g;
+        }
+        y += CHIP_H + 12.0;
+        y = footer(ui, th, origin.x, y, w) + 18.0;
+
+        let shown = visible(library(), &self.hbel.search, self.hbel.filter);
+        if shown.is_empty() {
+            y = paragraph(ui, th, pos2(origin.x, y), w, "No comments match.", Role::Sans, 14.0, th.muted, 1.45).bottom();
+        }
+        let copied = self.hbel_copied(ui);
+        let mut copy_req = None;
+        let mut view_req = None;
+        for e in shown {
+            y = source_card(ui, th, pos2(origin.x, y), w, e, copied, &mut copy_req, &mut view_req) + 12.0;
+        }
+        if let Some(code) = copy_req {
+            self.hbel_copy(ui, code);
+        }
+        if let Some(code) = view_req {
+            self.hbel.view_code(code);
+            self.hbel.source_open = false;
+        }
+        ui.allocate_rect(Rect::from_min_max(origin, pos2(origin.x + w, y)), Sense::hover());
+        y
     }
 
     fn hbel_results(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
         let mut clear = false;
+        let mut open_src = false;
         let y = toolbar(ui, origin, w, |ui| {
             if button(ui, th, "Clear", Btn::Secondary, true).clicked() {
                 clear = true;
             }
+            if button(ui, th, "View source sheet", Btn::Secondary, true).clicked() {
+                open_src = true;
+            }
         });
         if clear {
             self.hbel.clear();
+        }
+        if open_src {
+            self.hbel.source_open = true;
         }
 
         let wide = w >= 900.0;
@@ -118,11 +200,7 @@ impl App {
         let s_pos = if wide { pos2(origin.x + rw + gap, y) } else { pos2(origin.x, r_rect.bottom() + gap) };
         let sug = suggest(library(), &self.hbel.inputs);
         let viewing = self.hbel.viewing();
-        let now = ui.input(|i| i.time);
-        let copied = self.hbel.copied.filter(|(_, t)| now - t < 1.5).map(|(c, _)| c);
-        if copied.is_some() {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
-        }
+        let copied = self.hbel_copied(ui);
         let mut copy_req: Option<u8> = None;
         let opts = CardOpts { title: "Suggested comment", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: if wide { r_rect.height() } else { 0.0 } };
         let s_rect = card(ui, th, s_pos, sw, &opts, |ui, iw| {
@@ -170,8 +248,7 @@ impl App {
             ui.allocate_rect(Rect::from_min_max(o, pos2(o.x + iw, y)), Sense::hover());
         });
         if let Some(code) = copy_req {
-            ui.ctx().copy_text(entry(code).comment.clone());
-            self.hbel.copied = Some((code, now));
+            self.hbel_copy(ui, code);
         }
 
         let bottom = if wide { r_rect.bottom().max(s_rect.bottom()) } else { s_rect.bottom() };
@@ -317,6 +394,99 @@ fn entry_block(ui: &mut Ui, th: &Theme, x: f32, y: f32, w: f32, e: &Entry, ev: O
         y = bottom;
     }
     y
+}
+
+/// One code in the source sheet view. Returns the bottom y.
+#[allow(clippy::too_many_arguments)]
+fn source_card(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, e: &Entry, copied: Option<u8>, copy_req: &mut Option<u8>, view_req: &mut Option<u8>) -> f32 {
+    let p = ui.painter().clone();
+    let bg = p.add(egui::Shape::Noop);
+    let pad = 16.0;
+    let code_w = 54.0;
+    let x = pos.x + pad + code_w;
+    let cw = w - pad * 2.0 - code_w;
+    let mut y = pos.y + pad;
+
+    // code badge: click → show this comment on the results view
+    let (_, resp) = chip_button(ui, th, pos2(pos.x + pad, y), &e.code.to_string(), true, Id::new(("hbel-src-code", e.code)));
+    let resp = resp.on_hover_text("Show in the results view");
+    if resp.clicked() {
+        *view_req = Some(e.code);
+    }
+    let label_s = if copied == Some(e.code) { "Copied" } else { "Copy" };
+    let copy_w = 80.0;
+    if button_at(ui, th, pos2(pos.x + w - pad, y - 2.0), label_s, Btn::Mini).clicked() {
+        *copy_req = Some(e.code);
+    }
+    y = paragraph(ui, th, pos2(x, y + 3.0), cw - copy_w, &e.comment, Role::Serif, BODY, th.text, 1.5).bottom().max(y + 32.0) + 10.0;
+
+    for set in &e.sets {
+        if let Some(n) = &set.name {
+            y = text(ui, th, pos2(x, y), Align2::LEFT_TOP, n, Role::SansB, 13.0, th.accent_dark).bottom() + 4.0;
+        }
+        let pairs: Vec<(&str, &str)> = set.sheet.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        y = flow_pairs(ui, th, x, y, cw, &pairs) + 6.0;
+    }
+    let joined = |v: &Vec<String>| v.join(" · ");
+    let (rem, ex, refs) = (joined(&e.remarks), joined(&e.examples), joined(&e.references));
+    let mut extra: Vec<(&str, &str)> = Vec::new();
+    if !rem.is_empty() {
+        extra.push(("Remarks", &rem));
+    }
+    if !ex.is_empty() {
+        extra.push(("Example cases", &ex));
+    }
+    if !refs.is_empty() {
+        extra.push(("References", &refs));
+    }
+    if !extra.is_empty() {
+        y = flow_pairs(ui, th, x, y + 2.0, cw, &extra) + 6.0;
+    }
+    if !e.links.is_empty() {
+        let lr = text(ui, th, pos2(x, y + 1.0), Align2::LEFT_TOP, "Links", Role::SansB, 12.5, th.muted);
+        let mut lx = lr.right() + 8.0;
+        let mut bottom = lr.bottom();
+        for l in &e.links {
+            let lw = text_width(ui, th, &format!("{} ↗", l.label), Role::SansB, 13.0);
+            if lx + lw > x + cw {
+                lx = x;
+                y = bottom + 4.0;
+            }
+            let r = link(ui, th, pos2(lx, y), l, cw);
+            lx = r.right() + 18.0;
+            bottom = bottom.max(r.bottom());
+        }
+        y = bottom + 6.0;
+    }
+    let rect = Rect::from_min_max(pos, pos2(pos.x + w, y + pad - 6.0));
+    let r = th.radius_lg;
+    p.set(bg, egui::Shape::rect_filled(rect, cr(r), th.surface));
+    stroke_in(&p, rect, r, if th.palette == crate::theme::Palette::Pokemon { 2.0 } else { 1.0 }, th.line);
+    rect.bottom()
+}
+
+/// "Label value" pairs flowing left to right, wrapping. Returns the bottom y.
+fn flow_pairs(ui: &Ui, th: &Theme, x0: f32, y0: f32, w: f32, pairs: &[(&str, &str)]) -> f32 {
+    let gap = 22.0;
+    let (mut x, mut y, mut line_bottom) = (x0, y0, y0);
+    for (k, v) in pairs {
+        let kg = galley(ui, th, k, Role::SansB, 12.5, th.muted, 0.0, f32::INFINITY);
+        let vg_one = galley(ui, th, v, Role::Sans, 13.5, th.text, 0.0, f32::INFINITY);
+        let need = kg.size().x + 8.0 + vg_one.size().x;
+        if x > x0 && x + need > x0 + w {
+            x = x0;
+            y = line_bottom + 6.0;
+        }
+        let vx = x + kg.size().x + 8.0;
+        let vg = galley(ui, th, v, Role::Sans, 13.5, th.text, 0.0, (x0 + w - vx).max(80.0));
+        paint_galley(ui.painter(), th, Role::SansB, pos2(x, y + 1.5), kg, th.muted);
+        let vh = vg.size().y;
+        let vw = vg.size().x;
+        paint_galley(ui.painter(), th, Role::Sans, pos2(vx, y), vg, th.text);
+        line_bottom = line_bottom.max(y + vh.max(18.0));
+        x = vx + vw + gap;
+    }
+    line_bottom
 }
 
 /// "● Label   value" criteria line. The dot shows match (ok), conflict (bad) or nothing.

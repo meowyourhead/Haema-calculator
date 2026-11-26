@@ -390,6 +390,40 @@ pub fn parse(src: &str) -> Result<Library, String> {
     Ok(lib)
 }
 
+/// Every term of `q` (trimmed, case-insensitive, split on whitespace) appears
+/// somewhere on the entry's source-sheet card.
+pub fn matches_query(e: &Entry, q: &str) -> bool {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    let mut hay = format!("code {} {}", e.code, e.comment);
+    for s in &e.sets {
+        if let Some(n) = &s.name {
+            hay.push(' ');
+            hay.push_str(n);
+        }
+        for (k, v) in &s.sheet {
+            hay.push_str(&format!(" {} {}", k, v));
+        }
+    }
+    for t in e.remarks.iter().chain(&e.examples).chain(&e.references) {
+        hay.push(' ');
+        hay.push_str(t);
+    }
+    for l in &e.links {
+        hay.push(' ');
+        hay.push_str(&l.label);
+    }
+    let hay = hay.to_lowercase();
+    q.split_whitespace().all(|t| hay.contains(t))
+}
+
+/// Entries shown in the source sheet view for this search and filter.
+pub fn visible<'a>(lib: &'a Library, q: &str, g: Option<Group>) -> Vec<&'a Entry> {
+    lib.entries.iter().filter(|e| g.map_or(true, |g| e.groups.contains(&g)) && matches_query(e, q)).collect()
+}
+
 static LIBRARY: OnceLock<Library> = OnceLock::new();
 
 /// The embedded HBEL library (parsed once).
@@ -594,5 +628,34 @@ mod tests {
         for bad in ["Highlighted", "LabWare comment yet", "```", "Column1"] {
             assert!(!body.contains(bad), "data contains {bad:?}");
         }
+    }
+
+    fn codes(v: Vec<&Entry>) -> Vec<u8> {
+        v.iter().map(|e| e.code).collect()
+    }
+
+    #[test]
+    fn search_finds_sample_id() {
+        assert_eq!(codes(visible(library(), "  [sample ID] ", None)), vec![26]);
+    }
+
+    #[test]
+    fn search_terms_all_required() {
+        assert_eq!(codes(visible(library(), "beta major", None)), vec![7]);
+        let h = codes(visible(library(), "hpfh", None));
+        assert!(h.contains(&12) && h.contains(&21), "{h:?}");
+        assert!(visible(library(), "zzzz", None).is_empty());
+    }
+
+    #[test]
+    fn filter_groups() {
+        assert_eq!(codes(visible(library(), "", Some(Group::Variant))), vec![8, 9, 10, 11, 13, 14, 18, 22, 24, 26]);
+        assert_eq!(codes(visible(library(), "markedly", Some(Group::Thal))), vec![24]);
+    }
+
+    #[test]
+    fn empty_query_all() {
+        assert_eq!(visible(library(), "", None).len(), 25);
+        assert_eq!(visible(library(), "   ", None).len(), 25);
     }
 }
