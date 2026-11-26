@@ -21,3 +21,7 @@ __pycache__/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Shared HBEL folder next to the exe: added comments and the private
+# example sample IDs (real specimens; never commit them)
+/6. HBEL/

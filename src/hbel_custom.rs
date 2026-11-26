@@ -137,12 +137,68 @@ pub fn save(dir: &Path, e: &Entry) -> Result<(u8, PathBuf), String> {
     Err("No free comment code found.".into())
 }
 
-/// Read every `.txt` file in `dir`. Files that fail to parse are reported, not fatal.
+/// Example sample IDs for the built-in comments. They identify real lab
+/// specimens, so they live only in the shared folder, never in the source.
+/// One line per code: `4: 26XX1234, 26XX5678` (`#` starts a note).
+pub const EXAMPLES_FILE: &str = "examples.txt";
+
+/// Read `EXAMPLES_FILE` from `dir`: (code, sample IDs) pairs and any bad lines.
+pub fn load_examples(dir: &Path) -> (Vec<(u8, Vec<String>)>, Vec<String>) {
+    match std::fs::read_to_string(dir.join(EXAMPLES_FILE)) {
+        Ok(text) => parse_examples(&text),
+        Err(_) => (Vec::new(), Vec::new()),
+    }
+}
+
+pub fn parse_examples(text: &str) -> (Vec<(u8, Vec<String>)>, Vec<String>) {
+    let mut out = Vec::new();
+    let mut errors = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let line = line.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parsed = line.split_once(':').and_then(|(c, ids)| {
+            let code = c.trim().parse::<u8>().ok()?;
+            let ids: Vec<String> = ids.split([',', ';']).map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect();
+            (!ids.is_empty()).then_some((code, ids))
+        });
+        match parsed {
+            Some(p) => out.push(p),
+            None => errors.push(format!("{} line {}: use `code: sample ID, sample ID`", EXAMPLES_FILE, n + 1)),
+        }
+    }
+    (out, errors)
+}
+
+/// Add the examples to their comments (unknown codes are reported).
+pub fn attach_examples(lib: &mut Library, examples: &[(u8, Vec<String>)]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for (code, ids) in examples {
+        match lib.entries.iter_mut().find(|e| e.code == *code) {
+            Some(e) => {
+                for id in ids {
+                    if !e.examples.contains(id) {
+                        e.examples.push(id.clone());
+                    }
+                }
+            }
+            None => errors.push(format!("{}: there is no comment with code {}", EXAMPLES_FILE, code)),
+        }
+    }
+    errors
+}
+
+/// Read every `.txt` file in `dir` (except `EXAMPLES_FILE`). Files that fail to parse are reported, not fatal.
 pub fn load(dir: &Path) -> (Vec<Entry>, Vec<String>) {
     let mut entries = Vec::new();
     let mut errors = Vec::new();
     let Ok(rd) = std::fs::read_dir(dir) else { return (entries, errors) };
-    let mut files: Vec<PathBuf> = rd.filter_map(|d| d.ok().map(|d| d.path())).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("txt"))).collect();
+    let mut files: Vec<PathBuf> = rd
+        .filter_map(|d| d.ok().map(|d| d.path()))
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("txt")))
+        .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(EXAMPLES_FILE)))
+        .collect();
     files.sort();
     for p in files {
         let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -219,6 +275,29 @@ mod tests {
     use super::*;
     use crate::hbel_data::{library, parse, Range, Row, Rule};
     use crate::hbel_match::{suggest, Inputs};
+
+    #[test]
+    fn examples_file() {
+        let (ex, bad) = parse_examples("\u{feff}# real IDs\n\n4: 26XX0001; 26XX0002\n99: 26XX0003\nnonsense\n12:\n");
+        assert_eq!(ex, vec![(4, vec!["26XX0001".to_string(), "26XX0002".to_string()]), (99, vec!["26XX0003".to_string()])]);
+        assert_eq!(bad.len(), 2, "{:?}", bad);
+        let mut lib = library().clone();
+        let errs = attach_examples(&mut lib, &ex);
+        assert_eq!(errs, vec!["examples.txt: there is no comment with code 99".to_string()]);
+        attach_examples(&mut lib, &ex); // re-reading does not duplicate
+        assert_eq!(lib.entries.iter().find(|e| e.code == 4).unwrap().examples.len(), 2);
+    }
+
+    #[test]
+    fn examples_file_is_not_a_comment_file() {
+        let dir = std::env::temp_dir().join(format!("hbel-ex-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(EXAMPLES_FILE), "4: 26XX0001\n").unwrap();
+        let (entries, errors) = load(&dir);
+        assert!(entries.is_empty() && errors.is_empty(), "{:?}", errors);
+        assert_eq!(load_examples(&dir).0.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn tmp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("hbel-test-{}-{}", name, std::process::id()));

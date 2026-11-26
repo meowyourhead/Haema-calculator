@@ -31,7 +31,17 @@ month, year). Git tags cannot contain spaces, so the tag uses hyphens:
 
 Each release uses the date it is published. Do not reuse an old tag.
 
+The same date is the package version in `Cargo.toml`, written `year.month.day`
+without leading zeros (`9 Nov 2026` → `version = "2026.11.9"`). The app's update
+checker compares it with the newest GitHub release tag, so a build whose
+version is not bumped tells users its own release is an update.
+
+The update checker reads `https://api.github.com/repos/meowyourhead/Haema-calculator/releases/latest`
+without logging in, so it only works while the repository is public.
+
 ## Release checklist
+
+0. Set `version` in `Cargo.toml` to the release date (see above).
 
 1. Make sure the working tree is clean and the code builds:
 

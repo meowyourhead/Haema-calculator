@@ -343,7 +343,7 @@ repeating" (15). Spelling (haemoglobin / hemoglobin, Thalassemia) is left as wri
 | 13 | — | [sample ID], [sample ID] | — |
 | 15 | A1c elevated | — | — |
 | 18 | Refer to D-10 guide | — | — |
-| 21 | — | [sample ID], [sample ID] | Patel S, Dehury S, Purohit P, Meher S, Das K (2015). Inheritance of Hereditary Persistence of Fetal Haemoglobin (HPFH) in a Family of Western Odisha, India. J Clin Diagn Res 9(9): OD09–OD10. https://doi.org/10.7860/JCDR/2015/12878.6548 (from cell note by a colleague) |
+| 21 | — | [sample ID], [sample ID] | Patel S, Dehury S, Purohit P, Meher S, Das K (2015). Inheritance of Hereditary Persistence of Fetal Haemoglobin (HPFH) in a Family of Western Odisha, India. J Clin Diagn Res 9(9): OD09–OD10. https://doi.org/10.7860/JCDR/2015/12878.6548 (from a cell note in the sheet) |
 | 22 | — | [sample ID] | — |
 | 24 | — | [sample ID] | — |
 | 26 | Degradation peak co-eluting with HbA2 peak | [sample ID] | — |

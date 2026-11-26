@@ -71,17 +71,24 @@ impl HbelState {
     /// Screenshot harness: open the form with sample text (and the folder prompt if `confirm`).
     #[cfg(feature = "screenshot")]
     pub fn demo_form(&mut self, confirm: bool) {
-        self.form = Some(NewForm { comment: "HbA present. New pattern under review.".into(), example: "26AB1234".into(), confirm_create: confirm, ..Default::default() });
+        self.form = Some(NewForm { comment: "HbA present. New pattern under review.".into(), example: "26XX1234".into(), confirm_create: confirm, ..Default::default() });
     }
 
     /// Re-read the shared folder.
     pub fn reload(&mut self) {
-        let (custom, mut errors) = match hbel_custom::folder_path() {
-            Some(dir) => hbel_custom::load(&dir),
+        let dir = hbel_custom::folder_path();
+        let (custom, mut errors) = match &dir {
+            Some(dir) => hbel_custom::load(dir),
             None => (Vec::new(), Vec::new()),
         };
         errors.extend(hbel_custom::combined_errors(library(), &custom));
-        self.lib = Some(Arc::new(hbel_custom::combined(library(), &custom)));
+        let mut lib = hbel_custom::combined(library(), &custom);
+        if let Some(dir) = &dir {
+            let (examples, bad) = hbel_custom::load_examples(dir);
+            errors.extend(bad);
+            errors.extend(hbel_custom::attach_examples(&mut lib, &examples));
+        }
+        self.lib = Some(Arc::new(lib));
         self.folder_errors = errors;
     }
 
@@ -246,13 +253,16 @@ impl App {
             self.hbel.filter = g;
         }
         y += CHIP_H + 12.0;
-        y = footer(ui, th, origin.x, y, w) + 18.0;
+        let inputs = self.hbel.inputs.clone();
+        y = footer(ui, th, origin.x, y, w, &inputs) + 18.0;
 
         for err in self.hbel.folder_errors.clone() {
             y = note(ui, th, pos2(origin.x, y), Align2::LEFT_TOP, &format!("{}: {}", hbel_custom::FOLDER, err), w).bottom() + 8.0;
         }
         let lib = self.hbel.lib();
-        let shown = visible(&lib, &self.hbel.search, self.hbel.filter);
+        let hl = highlight_codes(&lib, &self.hbel.inputs, self.hbel.viewing());
+        let shown = fits_first(visible(&lib, &self.hbel.search, self.hbel.filter), &hl);
+        let n_hl = shown.iter().filter(|e| hl.contains(&e.code)).count();
         let copied = self.hbel_copied(ui);
         let mut copy_req = None;
         let mut view_req = None;
@@ -260,14 +270,13 @@ impl App {
             y = paragraph(ui, th, pos2(origin.x, y), w, "No comments match.", Role::Sans, 14.0, th.muted, 1.45).bottom();
         } else {
             let n = format!("{} of {} comments · click a code to open it in the results view", shown.len(), lib.entries.len());
-            let n = format!("{} · highlighted rows fit the entered results", n);
-            y = text(ui, th, pos2(origin.x, y), Align2::LEFT_TOP, &n, Role::Sans, 12.5, th.muted).bottom() + 8.0;
-            let hl = highlight_codes(&lib, &self.hbel.inputs, self.hbel.viewing());
-            let (bottom, first) = source_table(ui, th, pos2(origin.x, y), w, &shown, &hl, copied, &mut copy_req, &mut view_req);
+            let n = format!("{} · rows that fit the entered results move to the top, highlighted", n);
+            y = paragraph(ui, th, pos2(origin.x, y), w, &n, Role::Sans, 12.5, th.muted, 1.4).bottom() + 8.0;
+            let (bottom, first) = source_table(ui, th, pos2(origin.x, y), w, &shown, &hl, n_hl, copied, &mut copy_req, &mut view_req);
             y = bottom;
             if hl != self.hbel.last_highlight {
                 if let Some(r) = first {
-                    ui.scroll_to_rect(r, Some(Align::Center));
+                    ui.scroll_to_rect(r.expand2(vec2(0.0, 40.0)), Some(Align::TOP));
                 }
                 self.hbel.last_highlight = hl;
             }
@@ -382,7 +391,7 @@ impl App {
         if self.hbel.form.is_some() {
             bottom = self.hbel_form(ui, th, pos2(origin.x, bottom + gap), w, &lib);
         }
-        footer(ui, th, origin.x, bottom + 18.0, w)
+        footer(ui, th, origin.x, bottom + 18.0, w, &self.hbel.inputs)
     }
 }
 
@@ -428,7 +437,7 @@ impl App {
             y = ar.bottom() + 14.0;
             let half = (iw - 16.0) / 2.0;
             labeled_text_field(ui, th, pos2(o.x, y), half, "Remark (optional)", Id::new("hbel-new-remark"), &mut form.remark, "");
-            labeled_text_field(ui, th, pos2(o.x + half + 16.0, y), half, "Example sample ID (optional)", Id::new("hbel-new-example"), &mut form.example, "e.g. 26AB1234");
+            labeled_text_field(ui, th, pos2(o.x + half + 16.0, y), half, "Example sample ID (optional)", Id::new("hbel-new-example"), &mut form.example, "e.g. 26XX1234");
             y += LABEL_H + LABEL_GAP + FIELD_H + 16.0;
             let msg = format!(
                 "Saving exports this comment to the shared folder {} . Everyone who runs the app from this location will see it and it will be used for matching.",
@@ -487,19 +496,122 @@ impl App {
     }
 }
 
-/// Reference ranges and tab-wide links. Returns the bottom y.
-pub(crate) fn footer(ui: &mut Ui, th: &Theme, x: f32, y: f32, w: f32) -> f32 {
-    let r = text(ui, th, pos2(x, y), Align2::LEFT_TOP, "Reference ranges: HbA2 2.2–3.4 %, HbF 0–1.3 %", Role::Sans, 13.0, th.muted);
-    let mut lx = r.right() + 24.0;
-    let mut ly = y;
-    let mut bottom = r.bottom();
+/// Reference ranges (rows of the table below): parameter, its row, reference interval.
+const REF_RANGES: [(&str, Row, &str); 2] = [("HbA2 (%)", Row::Hba2, "2.2 – 3.4"), ("HbF (%)", Row::Hbf, "0 – 1.3")];
+const REF_HEADS: [&str; 3] = ["Parameter", "Reference range", "Result bands (as the chips read a typed %)"];
+const REF_PAD: f32 = 10.0;
+const BAND_H: f32 = 22.0;
+const BAND_GAP: f32 = 6.0;
+
+/// A chip band's limits in words: `< 2.2`, `2.2 – < 3.5`, `≤ 1.3`, `> 50`.
+pub(crate) fn band_text(r: &crate::hbel_data::Range) -> String {
+    let f = crate::logic::fmt_js;
+    if r.lo == 0.0 && r.lo_incl {
+        format!("{} {}", if r.hi_incl { "≤" } else { "<" }, f(r.hi))
+    } else if r.hi == 100.0 && r.hi_incl {
+        format!("{} {}", if r.lo_incl { "≥" } else { ">" }, f(r.lo))
+    } else {
+        format!("{}{} – {}{}", if r.lo_incl { "" } else { "> " }, f(r.lo), if r.hi_incl { "" } else { "< " }, f(r.hi))
+    }
+}
+
+/// Lay out (or, with `draw`, paint) one row's band pills inside `w`; returns the height used.
+fn band_pills(ui: &Ui, th: &Theme, pos: Pos2, w: f32, row: Row, inputs: &Inputs, draw: bool) -> f32 {
+    let (mut x, mut y) = (pos.x, pos.y);
+    let accent = if th.palette == crate::theme::Palette::Genshin { th.gold } else { th.accent };
+    for (i, opt) in row.options().iter().enumerate() {
+        let Some(range) = opt.range else { continue };
+        let lim = band_text(&range);
+        let lw = text_width(ui, th, opt.label, Role::SansB, 12.0);
+        let rw = text_width(ui, th, &lim, Role::Mono, 12.0);
+        let pw = (lw + rw + 8.0 + 20.0).ceil();
+        if x > pos.x && x + pw > pos.x + w {
+            x = pos.x;
+            y += BAND_H + BAND_GAP;
+        }
+        if draw {
+            let r = Rect::from_min_size(pos2(x, y), vec2(pw, BAND_H));
+            let on = inputs.chip_selected(row, i);
+            let p = ui.painter();
+            let (bg, border, fg) = if on { (th.accent_soft, accent, th.accent_dark) } else { (th.surface2, th.line, th.text) };
+            fill(p, r, pill(), bg);
+            stroke_in(p, r, pill(), 1.0, border);
+            text(ui, th, pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, opt.label, Role::SansB, 12.0, fg);
+            text(ui, th, pos2(r.left() + 10.0 + lw + 8.0, r.center().y), Align2::LEFT_CENTER, &lim, Role::Mono, 12.0, if on { fg } else { th.muted });
+        }
+        x += pw + BAND_GAP;
+    }
+    y + BAND_H - pos.y
+}
+
+/// Reference ranges as a small table, then the tab-wide links. Bands that the
+/// entered HbA2 / HbF fall in are highlighted. Returns the bottom y.
+pub(crate) fn footer(ui: &mut Ui, th: &Theme, x: f32, y: f32, w: f32, inputs: &Inputs) -> f32 {
+    let head_size = 10.88;
+    let head_w = |s: &str| text_width(ui, th, &s.to_uppercase(), Role::SansB, head_size) + 0.03 * head_size * s.chars().count() as f32;
+    let c0 = REF_RANGES.iter().map(|(n, _, _)| text_width(ui, th, n, Role::SansB, 13.0)).fold(head_w(REF_HEADS[0]), f32::max) + 2.0 * REF_PAD + 4.0;
+    let c1 = REF_RANGES.iter().map(|(_, _, r)| text_width(ui, th, r, Role::Mono, 13.0)).fold(head_w(REF_HEADS[1]), f32::max) + 2.0 * REF_PAD;
+    let (c0, c1) = (c0.ceil(), c1.ceil());
+    let c2 = (w - c0 - c1).max(150.0);
+    let tw = c0 + c1 + c2;
+    let xs = [x, x + c0, x + c0 + c1];
+    let head_h = 30.0;
+    let band_w = c2 - 2.0 * REF_PAD;
+    let row_h: Vec<f32> = REF_RANGES.iter().map(|(_, row, _)| (band_pills(ui, th, pos2(0.0, 0.0), band_w, *row, inputs, false) + 2.0 * REF_PAD).max(40.0)).collect();
+    let table_h = head_h + row_h.iter().sum::<f32>();
+    let frame = Rect::from_min_size(pos2(x, y), vec2(tw, table_h));
+
+    let p = ui.painter().clone();
+    let rad = th.radius_lg;
+    p.rect_filled(frame, cr(rad), th.surface);
+    p.with_clip_rect(Rect::from_min_size(frame.min, vec2(tw, head_h))).rect_filled(frame, cr(rad), th.surface2);
+    for (i, h) in REF_HEADS.iter().enumerate() {
+        let hw = if i == 2 { c2 } else { [c0, c1][i] } - 2.0 * REF_PAD;
+        let mut s = h.to_uppercase();
+        // the long band header drops its explanation when the column is narrow
+        if i == 2 && head_w(h) > hw {
+            s = "RESULT BANDS".into();
+        }
+        text_ls(ui, th, pos2(xs[i] + REF_PAD, y + head_h / 2.0), Align2::LEFT_CENTER, &s, Role::SansB, head_size, th.muted, 0.03);
+    }
+    let accent_bar = if th.palette == crate::theme::Palette::Genshin { th.gold } else { th.accent };
+    let mut ry = y + head_h;
+    for (k, (name, row, range)) in REF_RANGES.iter().enumerate() {
+        let h = row_h[k];
+        p.line_segment([pos2(x, ry), pos2(x + tw, ry)], Stroke::new(1.0_f32, th.line));
+        let pc = Rect::from_min_max(pos2(xs[0], ry), pos2(xs[1], ry + h));
+        let cell_bg = match th.palette {
+            crate::theme::Palette::Pokemon | crate::theme::Palette::Cyberpunk => th.surface2,
+            _ => th.accent_soft,
+        };
+        // filled as the rounded frame clipped to the cell, so the bottom-left
+        // corner keeps the table's rounding
+        p.with_clip_rect(pc).rect_filled(frame, cr(rad), cell_bg);
+        p.with_clip_rect(Rect::from_min_size(pc.min, vec2(3.0, h))).rect_filled(frame, cr(rad), accent_bar);
+        text(ui, th, pos2(pc.left() + 3.0 + REF_PAD, pc.center().y), Align2::LEFT_CENTER, name, Role::SansB, 13.0, th.text);
+        text(ui, th, pos2(xs[1] + REF_PAD, ry + h / 2.0), Align2::LEFT_CENTER, range, Role::Mono, 13.0, th.text);
+        let bh = band_pills(ui, th, pos2(0.0, 0.0), band_w, *row, inputs, false);
+        band_pills(ui, th, pos2(xs[2] + REF_PAD, ry + (h - bh) / 2.0), band_w, *row, inputs, true);
+        ry += h;
+    }
+    for cx in [xs[1], xs[2]] {
+        p.line_segment([pos2(cx - 0.5, y), pos2(cx - 0.5, y + table_h)], Stroke::new(1.0_f32, rgba(th.line, 0.8)));
+    }
+    stroke_in(&p, frame, rad, if th.palette == crate::theme::Palette::Pokemon { 2.0 } else { 1.0 }, th.line);
+    ui.allocate_rect(frame, Sense::hover());
+
+    // tab-wide links under the table
+    let mut lx = x;
+    let ly = frame.bottom() + 12.0;
+    let mut line_y = ly;
+    let mut bottom = frame.bottom();
     for l in &library().resources {
         let lw = text_width(ui, th, &format!("{} ↗", l.label), Role::SansB, 13.0);
-        if lx + lw > x + w {
+        if lx > x && lx + lw > x + w {
             lx = x;
-            ly = bottom + 8.0;
+            line_y = bottom + 8.0;
         }
-        let lr = link(ui, th, pos2(lx, ly), l, w);
+        let lr = link(ui, th, pos2(lx, line_y), l, w);
         lx = lr.right() + 24.0;
         bottom = bottom.max(lr.bottom());
     }
@@ -665,6 +777,16 @@ pub(crate) fn highlight_codes(lib: &Library, inputs: &Inputs, viewing: Option<u8
     suggest(lib, inputs).top.iter().map(|e| e.code).collect()
 }
 
+/// Rows that fit the results first (in sheet order), then every other row (also in sheet order).
+pub(crate) fn fits_first<'a>(rows: Vec<&'a Entry>, highlight: &[u8]) -> Vec<&'a Entry> {
+    let (mut fit, rest): (Vec<&Entry>, Vec<&Entry>) = rows.into_iter().partition(|e| highlight.contains(&e.code));
+    fit.extend(rest);
+    fit
+}
+
+/// Height of the "Other comments" band between the fitting rows and the rest.
+const SPLIT_H: f32 = 26.0;
+
 /// The sheet's text for one column; named criteria sets (code 12) are prefixed and stacked.
 pub(crate) fn cell_text(e: &Entry, col: &str) -> String {
     let named = e.sets.len() > 1;
@@ -701,10 +823,12 @@ pub(crate) fn notes_text(e: &Entry) -> String {
 
 /// The source sheet as a table. Comment and the sheet columns fit the visible width;
 /// only "Notes & links" sits past the right edge (scroll sideways to read it).
-/// Rows whose code is in `highlight` are highlighted. Returns the bottom y and the
-/// first highlighted row's rect.
+/// Rows whose code is in `highlight` are highlighted; the first `n_hl` rows are those,
+/// and an "Other comments" band separates them from the rest. Returns the bottom y
+/// and the first highlighted row's rect.
 #[allow(clippy::too_many_arguments)]
-fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], highlight: &[u8], copied: Option<u8>, copy_req: &mut Option<u8>, view_req: &mut Option<u8>) -> (f32, Option<Rect>) {
+fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], highlight: &[u8], n_hl: usize, copied: Option<u8>, copy_req: &mut Option<u8>, view_req: &mut Option<u8>) -> (f32, Option<Rect>) {
+    let split = n_hl > 0 && n_hl < rows.len();
     // spare width: up to 60% widens the sheet columns (to at most 2x), the rest goes to Comment
     let fixed: f32 = TABLE_COLS.iter().map(|c| c.1).sum();
     let spare = (w - fixed - COMMENT_MIN).max(0.0);
@@ -732,7 +856,7 @@ fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], hig
         })
         .collect();
     let head_h = heads.iter().enumerate().map(|(i, h)| paragraph_height(ui, th, wrap(i), h, Role::SansB, 11.5, 1.25)).fold(0.0_f32, f32::max) + 12.0;
-    let table_h = head_h + row_h.iter().sum::<f32>();
+    let table_h = head_h + row_h.iter().sum::<f32>() + if split { SPLIT_H } else { 0.0 };
     let area = Rect::from_min_size(pos, vec2(w, table_h + 14.0));
     let mut first_hl: Option<Rect> = None;
     let hl_bar = if th.palette == crate::theme::Palette::Genshin { th.gold } else { th.accent };
@@ -753,7 +877,15 @@ fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], hig
                 x += widths[i];
             }
             let mut y = o.y + head_h;
+            let mut split_band: Option<Rect> = None;
             for (ri, e) in rows.iter().enumerate() {
+                if split && ri == n_hl {
+                    let band = Rect::from_min_size(pos2(o.x, y), vec2(tw, SPLIT_H));
+                    p.rect_filled(band, 0.0, th.surface2);
+                    p.line_segment([pos2(o.x, y), pos2(o.x + tw, y)], Stroke::new(2.0_f32, th.line_strong));
+                    split_band = Some(band);
+                    y += SPLIT_H;
+                }
                 let rh = row_h[ri];
                 let row_rect = Rect::from_min_size(pos2(o.x, y), vec2(tw, rh));
                 if highlight.contains(&e.code) {
@@ -813,6 +945,12 @@ fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], hig
                 x += wd;
                 let c = if i == last - 1 { th.line_strong } else { rgba(th.line, 0.6) };
                 p.line_segment([pos2(x, o.y), pos2(x, o.y + table_h)], Stroke::new(1.0_f32, c));
+            }
+            // the "Other comments" band spans every column (painted over the rules)
+            if let Some(band) = split_band {
+                p.rect_filled(Rect::from_min_max(band.min + vec2(0.0, 1.0), band.max), 0.0, th.surface2);
+                let s = format!("OTHER COMMENTS · {} ", rows.len() - n_hl);
+                text_ls(ui, th, pos2(band.left() + CELL_PAD + 2.0, band.center().y + 0.5), Align2::LEFT_CENTER, &s, Role::SansB, 10.88, th.muted, 0.03);
             }
             stroke_in(&p, frame, r, if th.palette == crate::theme::Palette::Pokemon { 2.0 } else { 1.0 }, th.line);
             ui.allocate_rect(frame, Sense::hover());
@@ -874,8 +1012,14 @@ mod tests {
         assert_eq!(cell_text(e(1), "HbH inclusion body"), "NA");
         assert_eq!(cell_text(e(8), "F"), "");
         assert_eq!(notes_text(e(8)), "Remarks: Degradation Peak coeluting with HbA2 peak");
-        assert_eq!(notes_text(e(4)), "Examples: [sample ID], [sample ID]");
-        assert!(notes_text(e(21)).starts_with("Examples: [sample ID], [sample ID]\nReference: Patel"));
+        // built-in comments carry no sample IDs (they come from the shared folder)
+        assert!(lib.entries.iter().all(|x| x.examples.is_empty()));
+        assert!(notes_text(e(21)).starts_with("Reference: Patel"));
+        let mut lib2 = lib.clone();
+        let (ex, bad) = hbel_custom::parse_examples("# note\n4: 26XX0001, 26XX0002\n");
+        assert!(bad.is_empty());
+        assert!(hbel_custom::attach_examples(&mut lib2, &ex).is_empty());
+        assert_eq!(notes_text(lib2.entries.iter().find(|x| x.code == 4).unwrap()), "Examples: 26XX0001, 26XX0002");
         assert_eq!(TABLE_COLS.iter().map(|(c, _)| *c).collect::<Vec<_>>(), vec!["A2", "F", "Hgb", "RBC indices", "C window", "S window", "Fe", "HbH inclusion body"]);
     }
 
@@ -897,6 +1041,23 @@ mod tests {
         assert_eq!(s.viewing(), Some(27));
         assert!(s.lib().entries.iter().any(|e| e.code == 27 && e.comment == "A brand new pattern."));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn band_limits_read_naturally() {
+        let t = |row: Row| row.options().iter().map(|o| band_text(&o.range.unwrap())).collect::<Vec<_>>();
+        assert_eq!(t(Row::Hba2), vec!["< 2.2", "2.2 – < 3.5", "3.5 – < 4", "4 – 10", "> 10"]);
+        assert_eq!(t(Row::Hbf), vec!["≤ 1.3", "> 1.3 – < 5", "5 – 50", "> 50"]);
+    }
+
+    #[test]
+    fn fitting_rows_move_to_the_top() {
+        let lib = library();
+        let all: Vec<&Entry> = lib.entries.iter().collect();
+        let codes: Vec<u8> = fits_first(all.clone(), &[21, 17]).iter().map(|e| e.code).collect();
+        assert_eq!(&codes[..2], &[17, 21], "fits keep sheet order");
+        assert_eq!(codes.len(), all.len(), "the other rows stay visible");
+        assert_eq!(codes[2], all[0].code);
     }
 
     #[test]

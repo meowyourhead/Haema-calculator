@@ -84,6 +84,14 @@ pub struct App {
     pub cyberpunk_unlocked: bool,
     /// The last few characters typed, for spotting the unlock code.
     typed: String,
+    /// Display scale (egui zoom factor; remembered across launches).
+    pub scale: f32,
+    /// Zoom factor last seen on the context, to notice Ctrl+Plus / Minus.
+    seen_zoom: f32,
+    /// Background check for a newer GitHub release.
+    pub update: crate::update::Checker,
+    /// Ctrl+Tab (+1) / Ctrl+Shift+Tab (−1) presses taken out of this frame's input.
+    tab_steps: i32,
     /// Last window size requested by `fit_window`.
     fit_req: Option<egui::Vec2>,
     /// The page fits the window `fit_window` last asked for (no scrollbar needed).
@@ -115,11 +123,22 @@ pub struct Shot {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::fonts::install(&cc.egui_ctx);
-        let Settings { dark, palette, mascots, cyberpunk_unlocked } = Settings::load();
+        let Settings { dark, palette, mascots, cyberpunk_unlocked, scale } = Settings::load();
         #[allow(unused_mut)]
         let mut app = App::blank(palette, dark, mascots, cyberpunk_unlocked, genshin_backdrop_texture(&cc.egui_ctx), pokemon_backdrop_texture(&cc.egui_ctx));
+        app.scale = scale;
+        app.seen_zoom = cc.egui_ctx.zoom_factor();
+        cc.egui_ctx.set_zoom_factor(scale);
         #[cfg(feature = "screenshot")]
         app.apply_scene();
+        // Silent update check: only a newer release shows anything.
+        #[cfg(feature = "screenshot")]
+        let check = app.shot.path.is_none();
+        #[cfg(not(feature = "screenshot"))]
+        let check = true;
+        if check {
+            app.update.start(&cc.egui_ctx);
+        }
         app
     }
 
@@ -151,6 +170,10 @@ impl App {
             mascots,
             cyberpunk_unlocked,
             typed: String::new(),
+            scale: 1.0,
+            seen_zoom: 1.0,
+            update: Default::default(),
+            tab_steps: 0,
             fit_req: None,
             page_fits: true,
             base: None,
@@ -266,6 +289,59 @@ impl App {
         self.save();
     }
 
+    /// Set the display scale (clamped, snapped to whole percent). Takes effect
+    /// next frame; the window is re-fitted at the new scale.
+    pub fn set_scale(&mut self, ctx: &egui::Context, s: f32) {
+        let s = ((s.clamp(MIN_SCALE, MAX_SCALE)) * 100.0).round() / 100.0;
+        if (s - self.scale).abs() < 0.001 {
+            return;
+        }
+        self.scale = s;
+        ctx.set_zoom_factor(s);
+        self.fit_req = None;
+        self.save();
+    }
+
+    /// One step up or down the scale menu's list.
+    pub fn step_scale(&mut self, ctx: &egui::Context, up: bool) {
+        let cur = self.scale;
+        let next = if up {
+            SCALES.iter().copied().find(|s| *s > cur + 0.001).unwrap_or(MAX_SCALE)
+        } else {
+            SCALES.iter().rev().copied().find(|s| *s < cur - 0.001).unwrap_or(MIN_SCALE)
+        };
+        self.set_scale(ctx, next);
+    }
+
+    /// Adopt a zoom changed outside the menu (Ctrl+Plus / Minus / 0) and
+    /// re-fit the window whenever the zoom changes.
+    fn sync_zoom(&mut self, ctx: &egui::Context) {
+        let z = ctx.zoom_factor();
+        if (z - self.seen_zoom).abs() < 0.001 {
+            return;
+        }
+        self.seen_zoom = z;
+        self.fit_req = None;
+        if (z - self.scale).abs() >= 0.001 {
+            self.set_scale(ctx, z);
+        }
+    }
+
+    /// Ctrl+Tab / Ctrl+Shift+Tab: next / previous tab, wrapping at the ends.
+    fn cycle_tab(&mut self, ctx: &egui::Context, steps: i32) {
+        let order = crate::chrome::TABS;
+        let n = order.len() as i32;
+        let i = order.iter().position(|(t, _)| *t == self.tab).unwrap_or(0) as i32;
+        self.tab = order[(i + steps).rem_euclid(n) as usize].0;
+        self.menu_open = false;
+        // the focused field belongs to the page being left
+        ctx.memory_mut(|m| {
+            if let Some(id) = m.focused() {
+                m.surrender_focus(id);
+            }
+        });
+    }
+
     /// Typing "2077" anywhere reveals the Cyberpunk theme in the menu; typing
     /// it again hides it (and leaves Cyberpunk if it was the active theme).
     pub fn toggle_cyberpunk_unlock(&mut self) {
@@ -294,7 +370,7 @@ impl App {
     }
 
     fn save(&self) {
-        Settings { dark: self.dark, palette: self.palette, mascots: self.mascots, cyberpunk_unlocked: self.cyberpunk_unlocked }.save();
+        Settings { dark: self.dark, palette: self.palette, mascots: self.mascots, cyberpunk_unlocked: self.cyberpunk_unlocked, scale: self.scale }.save();
     }
 
     /// Page width inside the default window (before the margin), once measured.
@@ -333,7 +409,8 @@ impl App {
             // HBEL fills whatever width the window has and scrolls.
             Tab::Hbel => false,
         };
-        let (mut w, mut h) = (base.x, base.y);
+        // a roomier window than the tightest fit, with more background around the page
+        let (mut w, mut h) = ((base.x * WINDOW_GROW).ceil(), (base.y * WINDOW_GROW).ceil());
         let need_h = crate::chrome::CHROME_H + content_h + 2.0 * PAGE_MARGIN;
         if expanded {
             w = w.max(content_w + 2.0 * PAGE_MARGIN);
@@ -385,6 +462,13 @@ pub const PAGE_MARGIN: f32 = 24.0;
 const MIN_SIDE: f32 = 8.0;
 /// Room left at the bottom of the screen for the taskbar.
 const TASKBAR_ALLOWANCE: f32 = 56.0;
+/// The default window is this much larger than the tightest fit of every page.
+const WINDOW_GROW: f32 = 1.3;
+
+/// Display scale steps offered in the Theme menu (Ctrl+Plus / Minus also work).
+pub const SCALES: [f32; 8] = [0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
+pub const MIN_SCALE: f32 = 0.5;
+pub const MAX_SCALE: f32 = 3.0;
 
 /// Typed anywhere in the app to show / hide the Cyberpunk theme.
 const UNLOCK_CODE: &str = "2077";
@@ -409,7 +493,7 @@ fn feed_unlock_code(buf: &mut String, typed: &str) -> usize {
 
 // ---------------------------------------------------------------------------
 // Persistence: %APPDATA%\HaematologyCalculator\settings.txt
-// (theme=… / palette=… / mascots=shown|hidden / cyberpunk=unlocked|locked)
+// (theme=… / palette=… / mascots=shown|hidden / cyberpunk=unlocked|locked / scale=1.25)
 // ---------------------------------------------------------------------------
 
 struct Settings {
@@ -417,6 +501,7 @@ struct Settings {
     palette: Palette,
     mascots: bool,
     cyberpunk_unlocked: bool,
+    scale: f32,
 }
 
 fn settings_path() -> Option<std::path::PathBuf> {
@@ -428,15 +513,14 @@ fn settings_path() -> Option<std::path::PathBuf> {
 
 impl Settings {
     fn load() -> Settings {
-        let mut s = Settings { dark: false, palette: Palette::Default, mascots: true, cyberpunk_unlocked: false };
-        if let Some(Ok(text)) = settings_path().map(std::fs::read_to_string) {
-            s = Settings::parse(&text);
+        match settings_path().map(std::fs::read_to_string) {
+            Some(Ok(text)) => Settings::parse(&text),
+            _ => Settings::parse(""),
         }
-        s
     }
 
     fn parse(text: &str) -> Settings {
-        let mut s = Settings { dark: false, palette: Palette::Default, mascots: true, cyberpunk_unlocked: false };
+        let mut s = Settings { dark: false, palette: Palette::Default, mascots: true, cyberpunk_unlocked: false, scale: 1.0 };
         for line in text.lines() {
             if let Some(v) = line.strip_prefix("theme=") {
                 s.dark = v.trim() == "dark";
@@ -446,6 +530,12 @@ impl Settings {
                 s.mascots = v.trim() != "hidden";
             } else if let Some(v) = line.strip_prefix("cyberpunk=") {
                 s.cyberpunk_unlocked = v.trim() == "unlocked";
+            } else if let Some(v) = line.strip_prefix("scale=") {
+                if let Ok(x) = v.trim().parse::<f32>() {
+                    if x.is_finite() {
+                        s.scale = x.clamp(MIN_SCALE, MAX_SCALE);
+                    }
+                }
             }
         }
         // Cyberpunk is a hidden theme: without the unlock it falls back to Default.
@@ -463,11 +553,12 @@ impl Settings {
             let _ = std::fs::write(
                 path,
                 format!(
-                    "theme={}\npalette={}\nmascots={}\ncyberpunk={}\n",
+                    "theme={}\npalette={}\nmascots={}\ncyberpunk={}\nscale={:.2}\n",
                     if self.dark { "dark" } else { "light" },
                     self.palette.key(),
                     if self.mascots { "shown" } else { "hidden" },
-                    if self.cyberpunk_unlocked { "unlocked" } else { "locked" }
+                    if self.cyberpunk_unlocked { "unlocked" } else { "locked" },
+                    self.scale
                 ),
             );
         }
@@ -479,8 +570,29 @@ impl Settings {
 // ---------------------------------------------------------------------------
 
 impl eframe::App for App {
+    /// Ctrl+Tab / Ctrl+Shift+Tab are taken out before egui sees the input, so
+    /// they switch tabs without also moving focus between fields.
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let mut steps = 0;
+        raw.events.retain(|e| match e {
+            egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } if modifiers.ctrl || modifiers.command => {
+                if *pressed {
+                    steps += if modifiers.shift { -1 } else { 1 };
+                }
+                false
+            }
+            _ => true,
+        });
+        self.tab_steps += steps;
+    }
+
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         crate::cursor::install(frame);
+        self.sync_zoom(ctx);
+        let steps = std::mem::take(&mut self.tab_steps);
+        if steps != 0 {
+            self.cycle_tab(ctx, steps);
+        }
 
         // Ctrl+H hides / shows the theme mascots. Consumed here so a focused
         // text field never sees it.
@@ -721,14 +833,15 @@ fn nav_fields(ui: &Ui, focus_before: Option<Id>) {
 // Sidebar
 // ---------------------------------------------------------------------------
 
-const MENU_W: f32 = 150.0;
+const MENU_W: f32 = 184.0;
 const MENU_ROW: f32 = 28.0;
 const MENU_GAP: f32 = 4.0;
 const MENU_SPLIT: f32 = 9.0;
 
 fn menu_content_h(rows: usize) -> f32 {
-    // dark-mode row, a divider, then one row per listed palette
-    MENU_ROW + MENU_SPLIT + rows as f32 * (MENU_GAP + MENU_ROW)
+    // dark-mode row, a divider, one row per listed palette, a divider, then
+    // the display scale and update rows
+    MENU_ROW + MENU_SPLIT + rows as f32 * (MENU_GAP + MENU_ROW) + MENU_SPLIT + MENU_ROW + MENU_GAP + MENU_ROW
 }
 
 impl App {
@@ -909,6 +1022,88 @@ impl App {
                 self.set_palette(*pal);
             }
             y += toggle_h;
+        }
+
+        y += MENU_SPLIT;
+        p.line_segment([pos2(origin.x + 2.0, y - MENU_SPLIT / 2.0), pos2(origin.x + w - 2.0, y - MENU_SPLIT / 2.0)], Stroke::new(1.0_f32, div_c));
+
+        // --- display scale: − 100% +
+        let ctx = ui.ctx().clone();
+        let rect = Rect::from_min_size(pos2(origin.x, y), vec2(w, toggle_h));
+        let icon_c = pos2(rect.left() + 10.0, rect.center().y);
+        text(ui, th, pos2(icon_c.x - 4.0, icon_c.y + 1.0), Align2::CENTER_CENTER, "A", Role::SansB, 9.5, fgc);
+        text(ui, th, pos2(icon_c.x + 3.0, icon_c.y), Align2::CENTER_CENTER, "A", Role::SansB, 13.0, fgc);
+        text(ui, th, pos2(icon_c.x + 12.0, rect.center().y), Align2::LEFT_CENTER, "Scale", Role::Sans, 13.0, fgc);
+        let bs = 20.0;
+        let val_w = 42.0;
+        let plus = Rect::from_center_size(pos2(rect.right() - 6.0 - bs / 2.0, rect.center().y), vec2(bs, bs));
+        let val = Rect::from_center_size(pos2(plus.left() - val_w / 2.0, rect.center().y), vec2(val_w, bs));
+        let minus = Rect::from_center_size(pos2(val.left() - bs / 2.0, rect.center().y), vec2(bs, bs));
+        let step_btn = |ui: &mut Ui, r: Rect, id: &str, plus_sign: bool, enabled: bool| -> bool {
+            let resp = ui.interact(r, Id::new(("scale-btn", id)), if enabled { Sense::click() } else { Sense::hover() });
+            let c = if enabled { fgc } else { rgba(fgc, 0.35) };
+            if enabled && resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                fill(&p, r, 5.0, rgba(fgc, 0.12));
+            }
+            stroke_in(&p, r, 5.0, 1.0, rgba(fgc, if enabled { 0.35 } else { 0.18 }));
+            let m = r.center();
+            p.line_segment([pos2(m.x - 4.5, m.y), pos2(m.x + 4.5, m.y)], Stroke::new(1.4_f32, c));
+            if plus_sign {
+                p.line_segment([pos2(m.x, m.y - 4.5), pos2(m.x, m.y + 4.5)], Stroke::new(1.4_f32, c));
+            }
+            enabled && resp.clicked()
+        };
+        if step_btn(ui, minus, "down", false, self.scale > SCALES[0] + 0.001) {
+            self.step_scale(&ctx, false);
+        }
+        if step_btn(ui, plus, "up", true, self.scale < SCALES[SCALES.len() - 1] - 0.001) {
+            self.step_scale(&ctx, true);
+        }
+        let vr = ui.interact(val, Id::new("scale-reset"), Sense::click()).on_hover_text("Display scale (Ctrl+Plus / Ctrl+Minus). Click for 100 %.");
+        if vr.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if vr.clicked() {
+            self.set_scale(&ctx, 1.0);
+        }
+        let pct = format!("{}%", (self.scale * 100.0).round() as i32);
+        text(ui, th, val.center(), Align2::CENTER_CENTER, &pct, Role::SansB, 12.5, fgc);
+        y += toggle_h + gap;
+
+        // --- updates
+        let rect = Rect::from_min_size(pos2(origin.x, y), vec2(w, toggle_h));
+        let status = self.update.status();
+        let this_s = format!("This version: {}", crate::update::date_label(crate::update::current()));
+        let resp = side_toggle(ui, th, rect, Id::new("update-check"), false);
+        let resp = match &status {
+            crate::update::Status::Available { url, .. } => resp.on_hover_text(format!("{}\nOpen the download page: {}", this_s, url)),
+            _ => resp.on_hover_text(format!("{}\nClick to check GitHub for a newer release", this_s)),
+        };
+        let icon_c = pos2(rect.left() + 10.0, rect.center().y);
+        // circular arrow
+        let pts: Vec<egui::Pos2> = (0..=14).map(|i| {
+            let a = 0.6 + i as f32 / 14.0 * 4.9;
+            icon_c + vec2(a.cos(), a.sin()) * 4.5
+        }).collect();
+        let tip = *pts.last().unwrap();
+        p.add(egui::Shape::line(pts, Stroke::new(1.3_f32, fgc)));
+        p.add(egui::Shape::convex_polygon(vec![tip + vec2(-3.0, -1.5), tip + vec2(2.0, -2.5), tip + vec2(0.5, 2.5)], fgc, Stroke::NONE));
+        text(ui, th, pos2(icon_c.x + 12.0, rect.center().y), Align2::LEFT_CENTER, "Updates", Role::Sans, 13.0, fgc);
+        let (msg, mc) = match &status {
+            crate::update::Status::Idle => ("Check now".to_string(), rgba(fgc, 0.65)),
+            crate::update::Status::Checking => ("Checking…".to_string(), rgba(fgc, 0.65)),
+            crate::update::Status::UpToDate => ("Up to date".to_string(), if th.palette == Palette::Genshin { hex(0x9fd39a) } else { th.ok }),
+            crate::update::Status::Failed => ("Couldn't check".to_string(), rgba(fgc, 0.65)),
+            crate::update::Status::Available { tag, .. } => (format!("{} ↗", crate::update::display(tag)), if th.palette == Palette::Genshin { hex(0xd3bc8e) } else { th.accent }),
+        };
+        text(ui, th, pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, &msg, Role::SansB, 11.5, mc);
+        if resp.clicked() {
+            match status {
+                crate::update::Status::Available { url, .. } => ui.ctx().open_url(egui::OpenUrl::new_tab(url)),
+                crate::update::Status::Checking => {}
+                _ => self.update.start(&ctx),
+            }
         }
     }
 }

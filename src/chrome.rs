@@ -19,7 +19,8 @@ const TAB_FONT: f32 = 14.5;
 const BTN_W: f32 = 46.0;
 const CLOSE_W: f32 = 62.0;
 
-const TABS: [(Tab, &str); 4] = [
+/// The page tabs, in strip order (also the Ctrl+Tab order).
+pub const TABS: [(Tab, &str); 4] = [
     (Tab::Fbc, "FBC"),
     (Tab::Retic, "Retic"),
     (Tab::PtAptt, "PT / APTT"),
@@ -124,11 +125,41 @@ fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
     }
     app.menu_btn = theme_btn;
 
+    // --- "Update available" (only once the silent check found a newer release)
+    let mut drag_right = theme_btn.left();
+    if let crate::update::Status::Available { tag, url } = app.update.status() {
+        let label = "Update available";
+        let uw = text_width(ui, th, label, Role::SansB, 12.0).ceil() + 30.0;
+        let ur = Rect::from_min_max(pos2(theme_btn.left() - 8.0 - uw, theme_btn.top() + 3.0), pos2(theme_btn.left() - 8.0, theme_btn.bottom() - 3.0));
+        // only where it does not cover the tabs
+        if ur.left() > tabs_right + 8.0 {
+            let resp = ui.interact(ur, Id::new("chrome-update"), Sense::click());
+            let accent = if th.palette == Palette::Genshin { hex(0xd3bc8e) } else { th.accent };
+            let r = match th.palette {
+                Palette::Cyberpunk => 0.0,
+                _ => pill(),
+            };
+            fill(&p, ur, r, rgba(accent, if resp.hovered() { 0.28 } else { 0.16 }));
+            stroke_in(&p, ur, r, 1.0, rgba(accent, 0.75));
+            p.circle_filled(pos2(ur.left() + 12.0, ur.center().y), 3.0, accent);
+            let fg = if th.palette == Palette::Genshin { hex(0xece5d8) } else { th.text };
+            text(ui, th, pos2(ur.left() + 20.0, ur.center().y), Align2::LEFT_CENTER, label, Role::SansB, 12.0, fg);
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            let resp = resp.on_hover_text(format!("Version {} is out. Click to open its download page.", crate::update::display(&tag)));
+            if resp.clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+            }
+            drag_right = ur.left();
+        }
+    }
+
     // --- drag areas (either side of the centred tab group) ---------------
     let first_tab = draws.first().map(|d| d.rect.left()).unwrap_or(rect.left());
     let drag_rects = [
         (Id::new("chrome-drag-left"), Rect::from_min_max(pos2(rect.left(), rect.top()), pos2(first_tab, rect.bottom()))),
-        (Id::new("chrome-drag"), Rect::from_min_max(pos2(tabs_right, rect.top()), pos2(theme_btn.left(), rect.bottom()))),
+        (Id::new("chrome-drag"), Rect::from_min_max(pos2(tabs_right, rect.top()), pos2(drag_right, rect.bottom()))),
     ];
     for (id, drag_rect) in drag_rects {
         if drag_rect.width() <= 0.0 {
@@ -400,7 +431,7 @@ fn theme_button(ui: &mut Ui, th: &Theme, rect: Rect, open: bool) -> Response {
     let cy = rect.center().y;
     let d = if open { -2.0 } else { 2.0 };
     p.add(egui::Shape::line(vec![pos2(cx - 3.5, cy - d), pos2(cx, cy + d), pos2(cx + 3.5, cy - d)], Stroke::new(1.4_f32, fg)));
-    resp.on_hover_text("Colour theme and dark mode")
+    resp.on_hover_text("Colour theme, dark mode, display scale and updates")
 }
 
 // ---------------------------------------------------------------------------

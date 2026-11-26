@@ -7,7 +7,9 @@
 #   comment: text       the comment exactly as it goes into LabWare (one per code)
 #   groups: a, b        source-sheet filters: normal, hbf, thal, variant
 #   remark: text        a remark from the sheet (repeatable)
-#   example: ID         an example sample ID (repeatable)
+#   example: ID         an example sample ID (repeatable). Real sample IDs are
+#                       not kept here: they go in "6. HBEL\examples.txt"
+#                       next to the exe (see src/hbel_custom.rs)
 #   link: Label | URL   a link (repeatable)
 #   reference: text     a literature reference (repeatable)
 #   set: Name           starts a named set of criteria (code 12 has two)
@@ -71,8 +73,6 @@ hbh: not-detected
 [4]
 comment: HbA present. HbH inclusion body detected. Suggestive of Alpha Thalassemia Trait. Please correlate with family history and other laboratory findings.
 groups: thal
-example: [sample ID]
-example: [sample ID]
 sheet A2: Low to Normal
 sheet F: Normal
 sheet Hgb: Low to Normal
@@ -207,8 +207,6 @@ s: present (key)
 [12]
 comment: HbA present. Suspected Hereditary persistence of fetal hemoglobin (HPFH). Further investigation is required.
 groups: hbf
-example: [sample ID]
-example: [sample ID]
 link: News-Medical: What is HPFH? | https://www.news-medical.net/health/What-is-Hereditary-Persistence-of-Fetal-Hemoglobin.aspx
 link: PMC7983139 | https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7983139/
 set: Homozygous
@@ -237,8 +235,6 @@ s: neg (assumed)
 [13]
 comment: HbA present. Suspected Hb E Heterozygous. Further investigation required.
 groups: variant
-example: [sample ID]
-example: [sample ID]
 sheet A2: To report if no degradation follows A2 25-35%
 sheet F: Absent to Low
 hba2: 25..35
@@ -345,9 +341,7 @@ s: neg (assumed)
 [21]
 comment: HbA present. HbF slightly elevated but no abnormal haemoglobin detected. Suspected Hereditary Persistence of Fetal Haemoglobin (HPFH). Recommend correlating these results with family history and/or additional laboratory tests.
 groups: hbf
-example: [sample ID]
-example: [sample ID]
-reference: Patel, S., Dehury, S., Purohit, P., Meher, S., & Das, K. (2015). Inheritance of Hereditary Persistence of Fetal Haemoglobin (HPFH) in a Family of Western Odisha, India. Journal of clinical and diagnostic research : JCDR, 9(9), OD09–OD10. (Cell note by a colleague)
+reference: Patel, S., Dehury, S., Purohit, P., Meher, S., & Das, K. (2015). Inheritance of Hereditary Persistence of Fetal Haemoglobin (HPFH) in a Family of Western Odisha, India. Journal of clinical and diagnostic research : JCDR, 9(9), OD09–OD10. (from a cell note in the sheet)
 link: doi.org/10.7860/JCDR/2015/12878.6548 | https://doi.org/10.7860/JCDR/2015/12878.6548
 sheet A2: Normal
 sheet F: Slightly Elevated
@@ -366,7 +360,6 @@ hbh: not-detected
 [22]
 comment: HbA present. Split HbA2 peak detected suggesting a benign Delta Chain Variant. Exact HbA2 value not reported as split peaks cannot be accurately calibrated. Further investigation required.
 groups: variant
-example: [sample ID]
 sheet A2: Normal/Split
 sheet F: Normal
 sheet Hgb: Normal
@@ -394,7 +387,6 @@ s: neg (assumed)
 [24]
 comment: HbA present. Suggestive of Hb E / Beta Thalassemia. Please correlate with family history and other laboratory findings.
 groups: thal, variant
-example: [sample ID]
 sheet A2: 30-70%
 sheet F: 10-40%
 sheet Hgb: Markedly decreased
@@ -430,7 +422,6 @@ s: neg (assumed)
 comment: HbA present. Possible variant interference. Exact HbA2 value not reported due to the presence of co-eluting variant peak. HbH inclusion bodies detected. Please correlate with family history and other laboratory findings.
 groups: variant
 remark: Degradation Peak coeluting with HbA2 peak
-example: [sample ID]
 sheet A2: > 10 (A2 not to be reported)
 sheet HbH inclusion body: Detected
 hba2: >10

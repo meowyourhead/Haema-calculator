@@ -640,7 +640,9 @@ mod tests {
 
     #[test]
     fn search_finds_sample_id() {
-        assert_eq!(codes(visible(library(), "  [sample ID] ", None)), vec![26]);
+        let mut lib = library().clone();
+        lib.entries.iter_mut().find(|e| e.code == 26).unwrap().examples.push("26XX0001".into());
+        assert_eq!(codes(visible(&lib, "  26xx0001 ", None)), vec![26]);
     }
 
     #[test]
