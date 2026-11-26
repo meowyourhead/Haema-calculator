@@ -135,13 +135,15 @@ impl Range {
         self.lo.max(o.lo) < self.hi.min(o.hi)
     }
 
-    /// `A..B` (inclusive), `A..<B`, `>A` (to 100) or `<B` (from 0).
+    /// `A..B` (inclusive), `A..<B`, `>A..B`, `>A..<B`, `>A` (to 100) or `<B` (from 0).
     pub fn parse(s: &str) -> Option<Range> {
         let s = s.trim();
         let num = |t: &str| t.trim().parse::<f64>().ok().filter(|v| v.is_finite());
-        if let Some(rest) = s.strip_prefix('>') {
-            return Some(Range { lo: num(rest)?, lo_incl: false, hi: 100.0, hi_incl: true });
-        }
+        let (s, lo_incl) = match s.strip_prefix('>') {
+            Some(rest) if rest.contains("..") => (rest, false),
+            Some(rest) => return Some(Range { lo: num(rest)?, lo_incl: false, hi: 100.0, hi_incl: true }),
+            None => (s, true),
+        };
         if let Some(rest) = s.strip_prefix('<') {
             return Some(Range { lo: 0.0, lo_incl: true, hi: num(rest)?, hi_incl: false });
         }
@@ -154,7 +156,7 @@ impl Range {
         if lo > hi {
             return None;
         }
-        Some(Range { lo, lo_incl: true, hi, hi_incl })
+        Some(Range { lo, lo_incl, hi, hi_incl })
     }
 
     pub fn display(&self) -> String {
@@ -163,6 +165,8 @@ impl Range {
             format!(">{} %", f(self.lo))
         } else if self.lo <= 0.0 && !self.hi_incl {
             format!("<{} %", f(self.hi))
+        } else if !self.lo_incl {
+            format!(">{}–<{} %", f(self.lo), f(self.hi))
         } else if self.lo == self.hi {
             format!("{} %", f(self.lo))
         } else if self.hi_incl {
@@ -417,6 +421,13 @@ mod tests {
     }
 
     #[test]
+    fn range_parse_lo_exclusive() {
+        let r = Range::parse(">1.3..<5").unwrap();
+        assert_eq!(r, Range { lo: 1.3, lo_incl: false, hi: 5.0, hi_incl: false });
+        assert!(!r.contains(1.3) && r.contains(1.31) && !r.contains(5.0));
+    }
+
+    #[test]
     fn range_overlap_needs_positive_length() {
         let p = |s| Range::parse(s).unwrap();
         assert!(!p("5..50").overlaps(&p("0.1..5")));
@@ -476,5 +487,112 @@ mod tests {
         assert!(parse("[16]\nhb: normal\n").is_err(), "missing comment");
         assert!(parse("[16]\ncomment: X.\nhb: sometimes\n").is_err(), "unknown option");
         assert!(parse("hb: normal\n").is_err(), "outside entry");
+    }
+
+    const EXPECTED: [(u8, &str); 25] = [
+        (1, "HbA present. No abnormal haemoglobin detected."),
+        (3, "HbA present. The low red cell indices may suggest Thalassemia Trait and/or Iron Deficiency. Please correlate with family history and other laboratory findings."),
+        (4, "HbA present. HbH inclusion body detected. Suggestive of Alpha Thalassemia Trait. Please correlate with family history and other laboratory findings."),
+        (5, "HbA present. Suggestive of Beta Thalassemia Minor. Please correlate with family history and other laboratory findings."),
+        (6, "HbA present. Suggestive of Beta Thalassemia Intermedia. Please correlate with family history and other laboratory findings."),
+        (7, "HbA present. Suggestive of Beta Thalassemia Major. Please correlate with family history and other laboratory findings."),
+        (8, "HbA present. Possible variant interference. Please correlate with family history and other laboratory findings."),
+        (9, "HbA present. Suspected Hb C trait. Further investigation is required."),
+        (10, "HbA present. Suspected Hb S trait. Further investigation is required."),
+        (11, "HbA present. Suspected Hb SC trait. Further investigation is required."),
+        (12, "HbA present. Suspected Hereditary persistence of fetal hemoglobin (HPFH). Further investigation is required."),
+        (13, "HbA present. Suspected Hb E Heterozygous. Further investigation required."),
+        (14, "HbA present. Suspected Hb E Homozygous. Further investigation required."),
+        (15, "HbA present. Elevated HbF may be due to interference from the high HbA1c levels in the patient's blood. High HbA1c levels can interfere with the accuracy of HbF measurement. Please correlate with family history and other laboratory findings. Suggest repeating after 3 months."),
+        (16, "HbA present. HbA2 is borderline elevated but no abnormal haemoglobin detected."),
+        (17, "HbA present. The slightly elevated HbF is probably due to physiological causes."),
+        (18, "HbF elevated. Unable to determine haemoglobin A2 levels due to possible interference with haemoglobin variant(s). Please correlate with family history and other laboratory findings."),
+        (19, "HbA present. HbA2 is slightly below reference range but no abnormal haemoglobin detected."),
+        (20, "HbA present. The slightly elevated HbF is probably due to physiological causes. HbA2 is borderline elevated but no abnormal haemoglobin detected. Please correlate with family history and other laboratory findings."),
+        (21, "HbA present. HbF slightly elevated but no abnormal haemoglobin detected. Suspected Hereditary Persistence of Fetal Haemoglobin (HPFH). Recommend correlating these results with family history and/or additional laboratory tests."),
+        (22, "HbA present. Split HbA2 peak detected suggesting a benign Delta Chain Variant. Exact HbA2 value not reported as split peaks cannot be accurately calibrated. Further investigation required."),
+        (23, "HbA present. HbF is borderline elevated but no abnormal haemoglobin detected."),
+        (24, "HbA present. Suggestive of Hb E / Beta Thalassemia. Please correlate with family history and other laboratory findings."),
+        (25, "HbA present. HbA2 is slightly reduced and HbF minimally elevated. Pattern does not support Beta Thalassemia trait. Please correlate with iron status, clinical findings and family history."),
+        (26, "HbA present. Possible variant interference. Exact HbA2 value not reported due to the presence of co-eluting variant peak. HbH inclusion bodies detected. Please correlate with family history and other laboratory findings."),
+    ];
+
+    fn entry(code: u8) -> &'static Entry {
+        library().entries.iter().find(|e| e.code == code).unwrap()
+    }
+
+    #[test]
+    fn library_codes_complete() {
+        let codes: Vec<u8> = library().entries.iter().map(|e| e.code).collect();
+        let want: Vec<u8> = std::iter::once(1).chain(3..=26).collect();
+        assert_eq!(codes, want);
+    }
+
+    #[test]
+    fn comments_match_spec() {
+        for (code, text) in EXPECTED {
+            assert_eq!(entry(code).comment, text, "code {code}");
+        }
+    }
+
+    #[test]
+    fn comment_text_rules() {
+        for e in &library().entries {
+            let c = e.comment.replace("and/or", "").replace("Hb E / Beta", "");
+            assert!(!c.contains('/'), "code {} has a slash", e.code);
+            assert!(!e.comment.contains("  ") && !e.comment.ends_with(' '), "code {} spacing", e.code);
+            assert!(!e.comment.contains('\u{2019}'), "code {} curly apostrophe", e.code);
+            assert!(e.comment.ends_with('.'), "code {} final full stop", e.code);
+        }
+    }
+
+    #[test]
+    fn code12_has_two_sets() {
+        let e = entry(12);
+        let names: Vec<_> = e.sets.iter().map(|s| s.name.as_deref()).collect();
+        assert_eq!(names, vec![Some("Homozygous"), Some("Heterozygous")]);
+        let f = e.sets[1].crits.iter().find(|c| c.row == Row::Hbf).unwrap();
+        assert_eq!(f.rule, Rule::Range(Range::parse("1..30").unwrap()));
+    }
+
+    #[test]
+    fn key_flags_as_spec() {
+        let mut got: Vec<(u8, Row)> = Vec::new();
+        for e in &library().entries {
+            for s in &e.sets {
+                for c in s.crits.iter().filter(|c| c.key) {
+                    got.push((e.code, c.row));
+                }
+            }
+        }
+        got.sort_by_key(|(c, r)| (*c, r.index()));
+        let want = vec![
+            (4, Row::Hbh), (8, Row::Peak), (9, Row::CWin), (10, Row::SWin), (11, Row::CWin), (11, Row::SWin),
+            (15, Row::Hba1c), (18, Row::Peak), (22, Row::Peak), (26, Row::Peak), (26, Row::Hbh),
+        ];
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn groups_as_spec() {
+        let codes = |g: Group| -> Vec<u8> { library().entries.iter().filter(|e| e.groups.contains(&g)).map(|e| e.code).collect() };
+        assert_eq!(codes(Group::Normal), vec![1, 16, 17, 19, 20, 23, 25]);
+        assert_eq!(codes(Group::Hbf), vec![12, 15, 17, 18, 20, 21, 23]);
+        assert_eq!(codes(Group::Thal), vec![3, 4, 5, 6, 7, 24, 25]);
+        assert_eq!(codes(Group::Variant), vec![8, 9, 10, 11, 13, 14, 18, 22, 24, 26]);
+    }
+
+    #[test]
+    fn resources_has_bio_rad() {
+        assert!(library().resources[0].url.starts_with("https://hemoglobins.bio-rad.com/"));
+    }
+
+    #[test]
+    fn no_excluded_content() {
+        let src = include_str!("../assets/hbel_comments.txt");
+        let body: String = src.lines().filter(|l| !l.trim_start().starts_with('#')).collect::<Vec<_>>().join("\n");
+        for bad in ["Highlighted", "LabWare comment yet", "```", "Column1"] {
+            assert!(!body.contains(bad), "data contains {bad:?}");
+        }
     }
 }
