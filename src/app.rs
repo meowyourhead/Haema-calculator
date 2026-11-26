@@ -230,8 +230,8 @@ impl eframe::App for App {
             let screen_w = ctx.screen_rect().width();
             egui::SidePanel::right("hbel-source-panel")
                 .resizable(true)
-                // leave the results about 600 pt, give the table the rest
-                .default_width((screen_w - 600.0).min(screen_w * 0.62).max(420.0))
+                // half the window by default (the user can drag the edge)
+                .default_width((screen_w * 0.5).max(420.0))
                 .min_width(380.0)
                 .max_width((screen_w - 360.0).max(400.0))
                 .frame(egui::Frame::NONE.fill(th.bg).stroke(Stroke::new(1.0_f32, th.line_strong)))
