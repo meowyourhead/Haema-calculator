@@ -95,7 +95,8 @@ impl Inputs {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.hba2.trim().is_empty() && self.hbf.trim().is_empty() && self.film == 0 && self.sel.iter().all(Option::is_none)
+        // an unreadable number ("3,5") counts as nothing entered
+        ROWS.iter().all(|r| self.value(*r).is_none())
     }
 
     pub fn clear(&mut self) {
@@ -419,5 +420,12 @@ mod tests {
         i.number_edited(Row::Hba2);
         assert!((0..5).all(|k| !i.chip_selected(Row::Hba2, k)));
         assert!(i.value(Row::Hba2).is_none());
+    }
+
+    #[test]
+    fn invalid_number_alone_counts_as_empty() {
+        let i = Inputs { hba2: "3,5".into(), ..Default::default() };
+        assert!(i.is_empty());
+        assert_eq!(suggest(library(), &i).state, State::Empty);
     }
 }

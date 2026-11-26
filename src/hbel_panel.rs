@@ -24,6 +24,13 @@ impl HbelState {
         self.viewing = Some((code, self.inputs.clone()));
     }
 
+    /// Forget the viewed code once the results differ from when it was opened.
+    pub fn refresh_viewing(&mut self) {
+        if matches!(&self.viewing, Some((_, snap)) if *snap != self.inputs) {
+            self.viewing = None;
+        }
+    }
+
     pub fn viewing(&self) -> Option<u8> {
         match &self.viewing {
             Some((code, snap)) if *snap == self.inputs => Some(*code),
@@ -75,7 +82,7 @@ pub(crate) fn link(ui: &mut Ui, th: &Theme, pos: Pos2, l: &Link, max_w: f32) -> 
     let resp = ui.interact(rect, Id::new(("hbel-link", &l.url, pos.x as i32, pos.y as i32)), Sense::click()).on_hover_text(&l.url);
     let c = if resp.hovered() { th.accent_dark } else { th.accent };
     paint_galley(ui.painter(), th, Role::SansB, pos, g, c);
-    ui.painter().line_segment([pos2(rect.left(), rect.bottom()), pos2(rect.right(), rect.bottom())], Stroke::new(1.0, rgba(c, 0.6)));
+    ui.painter().line_segment([pos2(rect.left(), rect.bottom()), pos2(rect.right(), rect.bottom())], Stroke::new(1.0_f32, rgba(c, 0.6)));
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -173,6 +180,7 @@ impl App {
     }
 
     fn hbel_results(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
+        self.hbel.refresh_viewing();
         let mut clear = false;
         let mut open_src = false;
         let y = toolbar(ui, origin, w, |ui| {
@@ -221,7 +229,7 @@ impl App {
                         }
                         for (k, ev) in sug.top.iter().enumerate() {
                             if k > 0 {
-                                ui.painter().line_segment([pos2(o.x, y + 8.0), pos2(o.x + iw, y + 8.0)], Stroke::new(1.0, th.line));
+                                ui.painter().line_segment([pos2(o.x, y + 8.0), pos2(o.x + iw, y + 8.0)], Stroke::new(1.0_f32, th.line));
                                 y += 20.0;
                             }
                             y = entry_block(ui, th, o.x, y, iw, entry(ev.code), Some(ev), copied, &mut copy_req);
@@ -235,7 +243,7 @@ impl App {
                 }
                 if !sug.also.is_empty() {
                     y += 18.0;
-                    ui.painter().line_segment([pos2(o.x, y), pos2(o.x + iw, y)], Stroke::new(1.0, th.line));
+                    ui.painter().line_segment([pos2(o.x, y), pos2(o.x + iw, y)], Stroke::new(1.0_f32, th.line));
                     y = caption(ui, th, o.x, y + 14.0, "Also possible");
                     for ev in &sug.also {
                         let e = entry(ev.code);
@@ -282,7 +290,7 @@ fn results_body(ui: &mut Ui, th: &Theme, iw: f32, inputs: &mut Inputs) {
     let chips_x0 = o.x + LABEL_W;
     for (ri, row) in ROWS.iter().copied().enumerate() {
         if ri > 0 {
-            ui.painter().line_segment([pos2(o.x, y - ROW_GAP / 2.0 - 0.5), pos2(o.x + iw, y - ROW_GAP / 2.0 - 0.5)], Stroke::new(1.0, rgba(th.line, 0.7)));
+            ui.painter().line_segment([pos2(o.x, y - ROW_GAP / 2.0 - 0.5), pos2(o.x + iw, y - ROW_GAP / 2.0 - 0.5)], Stroke::new(1.0_f32, rgba(th.line, 0.7)));
         }
         let line_h = CHIP_H;
         let mut x = chips_x0;
@@ -361,6 +369,14 @@ fn entry_block(ui: &mut Ui, th: &Theme, x: f32, y: f32, w: f32, e: &Entry, ev: O
             let row = column_row(col).filter(|r| crit_rows.contains(r));
             let oc = ev.zip(row).and_then(|(v, r)| v.outcome(r));
             y = crit_line(ui, th, x, y, w, col, val, oc, false);
+        }
+        // defining criteria with no sheet column of their own (HbA2 peak, film)
+        let covered: Vec<Row> = set.sheet.iter().filter_map(|(c, _)| column_row(c)).collect();
+        for c in set.crits.iter().filter(|c| !c.assumed && !covered.contains(&c.row)) {
+            let oc = ev.and_then(|v| v.outcome(c.row));
+            let d = describe(c);
+            let (_, rest) = d.split_once(": ").unwrap_or(("", &d));
+            y = crit_line(ui, th, x, y, w, row_name(c.row), rest, oc, false);
         }
         for c in set.crits.iter().filter(|c| c.assumed) {
             let oc = ev.and_then(|v| v.outcome(c.row));
@@ -520,6 +536,17 @@ mod tests {
         s.view_code(7);
         assert_eq!(s.viewing(), Some(7));
         s.inputs.click_chip(Row::Hb, 0);
+        assert_eq!(s.viewing(), None);
+    }
+
+    #[test]
+    fn viewing_stays_cleared_after_undo() {
+        let mut s = HbelState::default();
+        s.view_code(7);
+        s.inputs.click_chip(Row::Hb, 0);
+        s.refresh_viewing();
+        s.inputs.click_chip(Row::Hb, 0); // undo: inputs equal the snapshot again
+        s.refresh_viewing();
         assert_eq!(s.viewing(), None);
     }
 }

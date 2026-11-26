@@ -553,6 +553,14 @@ impl App {
                     self.hbel.inputs.hba2 = "2.8".into();
                     self.hbel.inputs.hbf = "3".into();
                 }
+                "hbelsplit" if v == "1" => {
+                    use crate::hbel_data::Row;
+                    let i = &mut self.hbel.inputs;
+                    i.hbf = "0.5".into();
+                    i.click_chip(Row::Peak, 1);
+                    i.click_chip(Row::Hb, 0);
+                    i.click_chip(Row::Indices, 0);
+                }
                 "hbelsrc" => self.hbel.source_open = v == "1",
                 _ => {}
             }
