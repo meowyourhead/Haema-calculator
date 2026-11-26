@@ -581,6 +581,7 @@ impl App {
                     i.click_chip(Row::Indices, 0);
                 }
                 "hbelsrc" => self.hbel.source_open = v == "1",
+                "hbeladd" => self.hbel.demo_form(v == "2"),
                 _ => {}
             }
         }

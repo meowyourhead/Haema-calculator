@@ -1,6 +1,8 @@
 //! HBEL tab: results view (chips → suggested comment) and source sheet view.
 use crate::app::App;
-use crate::hbel_data::{library, visible, Entry, Group, Link, Row, GROUPS, ROWS};
+use crate::hbel_custom;
+use crate::hbel_data::{library, visible, Entry, Group, Library, Link, Row, GROUPS, ROWS};
+use std::sync::Arc;
 use crate::hbel_match::{describe, hint, row_name, suggest, Eval, Inputs, NumState, Outcome, State};
 use crate::panels::toolbar;
 use crate::theme::{rgba, Role, Theme};
@@ -16,6 +18,26 @@ pub struct HbelState {
     pub filter: Option<Group>,
     viewing: Option<(u8, Inputs)>,
     copied: Option<(u8, f64)>,
+    /// Built-in comments plus those added through the shared "6. HBEL" folder.
+    lib: Option<Arc<Library>>,
+    /// Problems reading the shared folder (bad files, clashing codes).
+    pub folder_errors: Vec<String>,
+    form: Option<NewForm>,
+    /// Confirmation after saving a new comment.
+    saved: Option<String>,
+}
+
+/// The "Add a new comment" form.
+#[derive(Default)]
+struct NewForm {
+    comment: String,
+    remark: String,
+    example: String,
+    /// The folder is missing and the user is being asked whether to create it.
+    confirm_create: bool,
+    error: Option<String>,
+    /// Scroll the form into view on the next frame (set when it is opened).
+    scroll_to: bool,
 }
 
 impl HbelState {
@@ -41,6 +63,71 @@ impl HbelState {
     fn clear(&mut self) {
         self.inputs.clear();
         self.viewing = None;
+        self.saved = None;
+    }
+
+    /// Screenshot harness: open the form with sample text (and the folder prompt if `confirm`).
+    #[cfg(feature = "screenshot")]
+    pub fn demo_form(&mut self, confirm: bool) {
+        self.form = Some(NewForm { comment: "HbA present. New pattern under review.".into(), example: "26AB1234".into(), confirm_create: confirm, ..Default::default() });
+    }
+
+    /// Re-read the shared folder.
+    pub fn reload(&mut self) {
+        let (custom, mut errors) = match hbel_custom::folder_path() {
+            Some(dir) => hbel_custom::load(&dir),
+            None => (Vec::new(), Vec::new()),
+        };
+        errors.extend(hbel_custom::combined_errors(library(), &custom));
+        self.lib = Some(Arc::new(hbel_custom::combined(library(), &custom)));
+        self.folder_errors = errors;
+    }
+
+    /// The comment library, reading the shared folder the first time it is needed.
+    pub fn lib(&mut self) -> Arc<Library> {
+        if self.lib.is_none() {
+            self.reload();
+        }
+        self.lib.clone().unwrap()
+    }
+
+    /// Build the new comment from the form and the entered results and save it.
+    /// `create` = the user agreed to create the missing folder.
+    fn save_new(&mut self, create: bool) {
+        let lib = self.lib();
+        let Some(form) = self.form.as_mut() else { return };
+        form.error = None;
+        let entry = match hbel_custom::entry_from_inputs(hbel_custom::next_code(&lib), &form.comment, &form.remark, &form.example, &self.inputs, &hbel_custom::stamp()) {
+            Ok(e) => e,
+            Err(e) => {
+                form.error = Some(e);
+                return;
+            }
+        };
+        let Some(dir) = hbel_custom::folder_path() else {
+            form.error = Some("Could not find the folder this program is running from.".into());
+            return;
+        };
+        if !dir.is_dir() {
+            if !create {
+                form.confirm_create = true;
+                return;
+            }
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                form.error = Some(format!("Could not create {}: {}", dir.display(), e));
+                form.confirm_create = false;
+                return;
+            }
+        }
+        match hbel_custom::save(&dir, &entry) {
+            Ok((code, path)) => {
+                self.form = None;
+                self.reload();
+                self.saved = Some(format!("Saved as code {} to {}", code, path.display()));
+                self.view_code(code);
+            }
+            Err(e) => form.error = Some(e),
+        }
     }
 }
 
@@ -64,8 +151,8 @@ fn column_row(col: &str) -> Option<Row> {
     }
 }
 
-fn entry(code: u8) -> &'static Entry {
-    library().entries.iter().find(|e| e.code == code).expect("code in library")
+fn entry(lib: &Library, code: u8) -> Option<&Entry> {
+    lib.entries.iter().find(|e| e.code == code)
 }
 
 /// Uppercase section caption; returns the y below it.
@@ -115,7 +202,9 @@ impl App {
     }
 
     fn hbel_copy(&mut self, ui: &Ui, code: u8) {
-        ui.ctx().copy_text(entry(code).comment.clone());
+        let lib = self.hbel.lib();
+        let Some(e) = entry(&lib, code) else { return };
+        ui.ctx().copy_text(e.comment.clone());
         self.hbel.copied = Some((code, ui.input(|i| i.time)));
     }
 
@@ -123,8 +212,14 @@ impl App {
     pub fn hbel_source(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
         // header: title + close, then search and filters
         text_ls(ui, th, pos2(origin.x, origin.y + 18.0), Align2::LEFT_CENTER, "Source sheet", Role::Display, 18.0, th.text, -0.01);
-        if button_at(ui, th, pos2(origin.x + w, origin.y), "Close", Btn::Secondary).clicked() {
+        let hr = Rect::from_min_max(pos2(origin.x + w - 400.0, origin.y), pos2(origin.x + w, origin.y + 36.0));
+        let mut hc = ui.new_child(UiBuilder::new().max_rect(hr).layout(Layout::right_to_left(Align::Min)));
+        hc.spacing_mut().item_spacing.x = 10.0;
+        if button(&mut hc, th, "Close", Btn::Secondary, true).clicked() {
             self.hbel.source_open = false;
+        }
+        if button(&mut hc, th, "Reload", Btn::Secondary, true).on_hover_text("Re-read new comments added on other PCs").clicked() {
+            self.hbel.reload();
         }
         let sr = Rect::from_min_size(pos2(origin.x, origin.y + 36.0 + 14.0), vec2(w.min(460.0), FIELD_H));
         text_field(ui, th, sr, Id::new("hbel-search"), &mut self.hbel.search, "Search comments, criteria, sample IDs…", false);
@@ -151,14 +246,18 @@ impl App {
         y += CHIP_H + 12.0;
         y = footer(ui, th, origin.x, y, w) + 18.0;
 
-        let shown = visible(library(), &self.hbel.search, self.hbel.filter);
+        for err in self.hbel.folder_errors.clone() {
+            y = note(ui, th, pos2(origin.x, y), Align2::LEFT_TOP, &format!("{}: {}", hbel_custom::FOLDER, err), w).bottom() + 8.0;
+        }
+        let lib = self.hbel.lib();
+        let shown = visible(&lib, &self.hbel.search, self.hbel.filter);
         let copied = self.hbel_copied(ui);
         let mut copy_req = None;
         let mut view_req = None;
         if shown.is_empty() {
             y = paragraph(ui, th, pos2(origin.x, y), w, "No comments match.", Role::Sans, 14.0, th.muted, 1.45).bottom();
         } else {
-            let n = format!("{} of {} comments · click a code to open it in the results view", shown.len(), library().entries.len());
+            let n = format!("{} of {} comments · click a code to open it in the results view", shown.len(), lib.entries.len());
             y = text(ui, th, pos2(origin.x, y), Align2::LEFT_TOP, &n, Role::Sans, 12.5, th.muted).bottom() + 8.0;
             y = source_table(ui, th, pos2(origin.x, y), w, &shown, copied, &mut copy_req, &mut view_req);
         }
@@ -174,11 +273,17 @@ impl App {
 
     fn hbel_results(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
         self.hbel.refresh_viewing();
+        let lib = self.hbel.lib();
         let mut clear = false;
         let mut open_src = false;
-        let y = toolbar(ui, origin, w, |ui| {
+        let mut open_form = false;
+        let form_open = self.hbel.form.is_some();
+        let mut y = toolbar(ui, origin, w, |ui| {
             if button(ui, th, "Clear", Btn::Secondary, true).clicked() {
                 clear = true;
+            }
+            if button(ui, th, if form_open { "Cancel new comment" } else { "Add new comment" }, Btn::Secondary, true).clicked() {
+                open_form = true;
             }
             let src_label = if self.hbel.source_open { "Hide source sheet" } else { "Show source sheet" };
             if button(ui, th, src_label, Btn::Secondary, true).clicked() {
@@ -191,6 +296,14 @@ impl App {
         if open_src {
             self.hbel.source_open = !self.hbel.source_open;
         }
+        if open_form {
+            self.hbel.form = if form_open { None } else { Some(NewForm { scroll_to: true, ..Default::default() }) };
+            self.hbel.saved = None;
+        }
+        if let Some(msg) = self.hbel.saved.clone() {
+            let r = chip(ui, th, pos2(origin.x, y), Align2::LEFT_TOP, &format!("✓ {}", msg), Role::SansB, 13.0, th.ok, th.ok_bg, Some((1.0, th.ok)), vec2(12.0, 6.0), th.radius);
+            y = r.bottom() + 14.0;
+        }
 
         let wide = w >= 900.0;
         let gap = 16.0;
@@ -200,7 +313,7 @@ impl App {
         let r_rect = card(ui, th, pos2(origin.x, y), rw, &opts, |ui, iw| results_body(ui, th, iw, inputs));
 
         let s_pos = if wide { pos2(origin.x + rw + gap, y) } else { pos2(origin.x, r_rect.bottom() + gap) };
-        let sug = suggest(library(), &self.hbel.inputs);
+        let sug = suggest(&lib, &self.hbel.inputs);
         let viewing = self.hbel.viewing();
         let copied = self.hbel_copied(ui);
         let mut copy_req: Option<u8> = None;
@@ -209,13 +322,13 @@ impl App {
             let o = ui.cursor().min;
             let mut y = o.y;
             let muted = |ui: &Ui, y: f32, s: &str| paragraph(ui, th, pos2(o.x, y), iw, s, Role::Sans, 14.0, th.muted, 1.45).bottom();
-            if let Some(code) = viewing {
-                y = muted(ui, y, &format!("Viewing code {} (not from your results)", code)) + 10.0;
-                y = entry_block(ui, th, o.x, y, iw, entry(code), None, copied, &mut copy_req);
+            if let Some(e) = viewing.and_then(|c| entry(&lib, c)) {
+                y = muted(ui, y, &format!("Viewing code {} (not from your results)", e.code)) + 10.0;
+                y = entry_block(ui, th, o.x, y, iw, e, None, copied, &mut copy_req);
             } else {
                 match sug.state {
                     State::Empty => y = muted(ui, y, "Enter results on the left."),
-                    State::NoFit => y = muted(ui, y, "No comment fits exactly.") + 4.0,
+                    State::NoFit => y = muted(ui, y, "No comment fits exactly. If this is a new kind of case, use \u{201c}Add new comment\u{201d}.") + 4.0,
                     State::Fits => {
                         if sug.top.len() > 1 {
                             let t = format!("{} comments fit equally well", sug.top.len());
@@ -226,9 +339,10 @@ impl App {
                                 ui.painter().line_segment([pos2(o.x, y + 8.0), pos2(o.x + iw, y + 8.0)], Stroke::new(1.0_f32, th.line));
                                 y += 20.0;
                             }
-                            y = entry_block(ui, th, o.x, y, iw, entry(ev.code), Some(ev), copied, &mut copy_req);
+                            let Some(e) = entry(&lib, ev.code) else { continue };
+                            y = entry_block(ui, th, o.x, y, iw, e, Some(ev), copied, &mut copy_req);
                             if sug.top.len() > 1 {
-                                if let Some(h) = hint(ev, entry(ev.code)) {
+                                if let Some(h) = hint(ev, e) {
                                     y = paragraph(ui, th, pos2(o.x, y + 8.0), iw, &format!("To confirm: {}", h.trim_start_matches("also expects ")), Role::SerifI, 13.5, th.warn, 1.4).bottom();
                                 }
                             }
@@ -240,7 +354,7 @@ impl App {
                     ui.painter().line_segment([pos2(o.x, y), pos2(o.x + iw, y)], Stroke::new(1.0_f32, th.line));
                     y = caption(ui, th, o.x, y + 14.0, "Also possible");
                     for ev in &sug.also {
-                        let e = entry(ev.code);
+                        let Some(e) = entry(&lib, ev.code) else { continue };
                         let tail = hint(ev, e).unwrap_or_else(|| e.comment.clone());
                         let code_r = text(ui, th, pos2(o.x, y), Align2::LEFT_TOP, &format!("Code {}", ev.code), Role::SansB, 13.5, th.text);
                         y = paragraph(ui, th, pos2(o.x + 70.0, y), iw - 70.0, &tail, Role::Sans, 13.5, th.muted, 1.4).bottom().max(code_r.bottom()) + 8.0;
@@ -253,8 +367,112 @@ impl App {
             self.hbel_copy(ui, code);
         }
 
-        let bottom = if wide { r_rect.bottom().max(s_rect.bottom()) } else { s_rect.bottom() };
+        let mut bottom = if wide { r_rect.bottom().max(s_rect.bottom()) } else { s_rect.bottom() };
+        if self.hbel.form.is_some() {
+            bottom = self.hbel_form(ui, th, pos2(origin.x, bottom + gap), w, &lib);
+        }
         footer(ui, th, origin.x, bottom + 18.0, w)
+    }
+}
+
+impl App {
+    /// "Add a new comment" card: criteria come from the entered results; saving exports
+    /// the comment to the shared "6. HBEL" folder next to the exe. Returns the bottom y.
+    fn hbel_form(&mut self, ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, lib: &Library) -> f32 {
+        let next = hbel_custom::next_code(lib);
+        let dir = hbel_custom::folder_path();
+        let dir_s = dir.as_ref().map_or("(unknown)".to_string(), |d| d.display().to_string());
+        let exists = dir.as_ref().is_some_and(|d| d.is_dir());
+        let unit = format!("will be code {}", next);
+        let opts = CardOpts { title: "Add new comment", unit: &unit, bar: Some(th.accent), head_bg: None, title_color: None, chip: None, min_height: 0.0 };
+        let inputs = self.hbel.inputs.clone();
+        let mut act: Option<&str> = None;
+        let Some(form) = self.hbel.form.as_mut() else { return pos.y };
+        let rect = card(ui, th, pos, w, &opts, |ui, iw| {
+            let o = ui.cursor().min;
+            let mut y = o.y;
+            y = caption(ui, th, o.x, y, "Criteria (from the results entered above)");
+            let mut any = false;
+            for row in ROWS {
+                if inputs.value(row).is_none() {
+                    continue;
+                }
+                any = true;
+                let shown = match inputs.number(row) {
+                    NumState::Valid(x) => {
+                        let chip_l = row.options().iter().find(|o| o.range.is_some_and(|r| r.contains(x))).map_or("", |o| o.label);
+                        format!("{} % (saved as the {} range)", crate::logic::fmt_js(x), chip_l)
+                    }
+                    _ => row.options().iter().enumerate().filter(|(i, _)| inputs.chip_selected(row, *i)).map(|(_, o)| o.label).collect::<Vec<_>>().join(", "),
+                };
+                y = crit_line(ui, th, o.x, y, iw, row_name(row), &shown, None, false);
+            }
+            if !any {
+                y = paragraph(ui, th, pos2(o.x, y), iw, "No results entered yet. Enter the new case's results above; they become this comment's criteria.", Role::Sans, 13.5, th.bad, 1.4).bottom() + 4.0;
+            }
+            y += 10.0;
+            label(ui, th, pos2(o.x, y), "Comment text (as it should go into LabWare)");
+            let ar = Rect::from_min_size(pos2(o.x, y + LABEL_H + LABEL_GAP), vec2(iw, 84.0));
+            text_area(ui, th, ar, Id::new("hbel-new-comment"), &mut form.comment, "e.g. HbA present. …");
+            y = ar.bottom() + 14.0;
+            let half = (iw - 16.0) / 2.0;
+            labeled_text_field(ui, th, pos2(o.x, y), half, "Remark (optional)", Id::new("hbel-new-remark"), &mut form.remark, "");
+            labeled_text_field(ui, th, pos2(o.x + half + 16.0, y), half, "Example sample ID (optional)", Id::new("hbel-new-example"), &mut form.example, "e.g. 26AB1234");
+            y += LABEL_H + LABEL_GAP + FIELD_H + 16.0;
+            let msg = format!(
+                "Saving exports this comment to the shared folder {} . Everyone who runs the app from this location will see it and it will be used for matching.",
+                dir_s
+            );
+            y = note(ui, th, pos2(o.x, y), Align2::LEFT_TOP, &msg, iw).bottom() + 12.0;
+            if let Some(err) = &form.error {
+                y = paragraph(ui, th, pos2(o.x, y), iw, err, Role::SansB, 13.5, th.bad, 1.4).bottom() + 10.0;
+            }
+            let br = Rect::from_min_size(pos2(o.x, y), vec2(iw, 36.0));
+            let mut bc = ui.new_child(UiBuilder::new().max_rect(br).layout(Layout::left_to_right(Align::Min)));
+            bc.spacing_mut().item_spacing.x = 10.0;
+            if form.confirm_create && !exists {
+                let q = format!("The folder \u{201c}{}\u{201d} does not exist yet. Create it now and save?", hbel_custom::FOLDER);
+                let qr = paragraph(ui, th, pos2(o.x, y), iw, &q, Role::SansB, 13.5, th.warn, 1.4);
+                let br2 = Rect::from_min_size(pos2(o.x, qr.bottom() + 8.0), vec2(iw, 36.0));
+                let mut bc2 = ui.new_child(UiBuilder::new().max_rect(br2).layout(Layout::left_to_right(Align::Min)));
+                bc2.spacing_mut().item_spacing.x = 10.0;
+                if button(&mut bc2, th, "Create folder and save", Btn::Primary, true).clicked() {
+                    act = Some("create");
+                }
+                if button(&mut bc2, th, "Don't create", Btn::Secondary, true).clicked() {
+                    act = Some("no-create");
+                }
+                y = br2.bottom();
+            } else {
+                let save_l = format!("Export to {}", hbel_custom::FOLDER);
+                if button(&mut bc, th, &save_l, Btn::Primary, true).clicked() {
+                    act = Some("save");
+                }
+                if button(&mut bc, th, "Cancel", Btn::Secondary, true).clicked() {
+                    act = Some("cancel");
+                }
+                y = br.bottom();
+            }
+            ui.allocate_rect(Rect::from_min_max(o, pos2(o.x + iw, y)), Sense::hover());
+        });
+        match act {
+            Some("save") => self.hbel.save_new(false),
+            Some("create") => self.hbel.save_new(true),
+            Some("no-create") => {
+                if let Some(f) = self.hbel.form.as_mut() {
+                    f.confirm_create = false;
+                    f.error = Some(format!("Not saved: the folder \u{201c}{}\u{201d} was not created.", hbel_custom::FOLDER));
+                }
+            }
+            Some("cancel") => self.hbel.form = None,
+            _ => {}
+        }
+        if let Some(f) = self.hbel.form.as_mut() {
+            if std::mem::take(&mut f.scroll_to) {
+                ui.scroll_to_rect(rect, Some(Align::TOP));
+            }
+        }
+        rect.bottom()
     }
 }
 
@@ -453,6 +671,9 @@ pub(crate) fn notes_text(e: &Entry) -> String {
     for r in &e.references {
         out.push(format!("Reference: {}", r));
     }
+    if let Some(f) = &e.source {
+        out.push(format!("File: {}\\{}", hbel_custom::FOLDER, f));
+    }
     out.join("\n")
 }
 
@@ -486,7 +707,7 @@ fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], cop
     let row_h: Vec<f32> = rows
         .iter()
         .map(|e| {
-            let mut h = CHIP_H;
+            let mut h = CHIP_H + if e.source.is_some() { 24.0 } else { 0.0 };
             h = h.max(comment_cell(ui, th, wrap(1), &e.comment, "Copied").1);
             for (k, (col, _)) in TABLE_COLS.iter().enumerate() {
                 h = h.max(paragraph_height(ui, th, wrap(k + 2), &cell_text(e, col), Role::Sans, CELL_FONT, 1.4));
@@ -529,6 +750,9 @@ fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], cop
                 let (_, resp) = chip_button(ui, th, pos2(x + CELL_PAD, top), &e.code.to_string(), true, Id::new(("hbel-src-code", e.code)));
                 if resp.on_hover_text("Show in the results view").clicked() {
                     *view_req = Some(e.code);
+                }
+                if e.source.is_some() {
+                    chip(ui, th, pos2(x + CELL_PAD, top + CHIP_H + 6.0), Align2::LEFT_TOP, "Added", Role::SansB, 10.5, th.ok, th.ok_bg, None, vec2(6.0, 1.0), pill());
                 }
                 x += widths[0];
                 // comment (selectable) with the copy button after its last word
@@ -628,5 +852,25 @@ mod tests {
         assert_eq!(notes_text(e(4)), "Examples: 26AK7710, 26AQ1798");
         assert!(notes_text(e(21)).starts_with("Examples: 24AR2337, 24AU2617\nReference: Patel"));
         assert_eq!(TABLE_COLS.iter().map(|(c, _)| *c).collect::<Vec<_>>(), vec!["A2", "F", "Hgb", "RBC indices", "C window", "S window", "Fe", "HbH inclusion body"]);
+    }
+
+    #[test]
+    fn save_flow_asks_before_creating_folder() {
+        let dir = hbel_custom::folder_path().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut s = HbelState::default();
+        s.inputs.hba2 = "3.7".into();
+        s.inputs.click_chip(Row::Hb, 1);
+        s.form = Some(NewForm { comment: "A brand new pattern".into(), ..Default::default() });
+        s.save_new(false);
+        assert!(!dir.exists(), "must not create the folder without asking");
+        assert!(s.form.as_ref().unwrap().confirm_create);
+        s.save_new(true);
+        assert!(dir.is_dir());
+        assert!(s.form.is_none());
+        assert!(s.saved.as_deref().unwrap().starts_with("Saved as code 27 to "));
+        assert_eq!(s.viewing(), Some(27));
+        assert!(s.lib().entries.iter().any(|e| e.code == 27 && e.comment == "A brand new pattern."));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

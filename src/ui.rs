@@ -469,6 +469,42 @@ fn field_impl(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, h
     *value != before
 }
 
+/// Caption + unfiltered text field stacked.
+#[allow(clippy::too_many_arguments)]
+pub fn labeled_text_field(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, caption: &str, id: Id, value: &mut String, hint: &str) -> bool {
+    label(ui, th, pos, caption);
+    let r = Rect::from_min_size(pos + vec2(0.0, LABEL_H + LABEL_GAP), vec2(w, FIELD_H));
+    text_field(ui, th, r, id, value, hint, false)
+}
+
+/// Multi-line text box in the same style as `field`. Returns whether the text changed.
+pub fn text_area(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hint: &str) -> bool {
+    let focused = ui.memory(|m| m.has_focus(id));
+    let p = ui.painter().clone();
+    let r = if th.palette == Palette::Pokemon { 12.0 } else { th.radius };
+    let bg = if th.palette == Palette::Pokemon { th.field } else if focused { th.surface } else { th.bg };
+    let border = if focused { if th.palette == Palette::Genshin { th.gold } else { th.accent } } else { th.line_strong };
+    fill(&p, rect, r, bg);
+    stroke_in(&p, rect, r, 1.0, border);
+    let inner = rect.shrink2(vec2(11.0, 8.0));
+    let mut child = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::top_down(Align::Min)));
+    let before = value.clone();
+    egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height(inner.height()).show(&mut child, |ui| {
+        ui.add(
+            TextEdit::multiline(value)
+                .id(id)
+                .frame(false)
+                .margin(Margin::ZERO)
+                .desired_width(inner.width())
+                .desired_rows(3)
+                .font(th.font(Role::Serif, 14.5))
+                .text_color(th.text)
+                .hint_text(RichText::new(hint).color(th.muted)),
+        );
+    });
+    *value != before
+}
+
 /// Caption + field stacked, occupying `rect.min` .. `rect.min + (w, 60)`.
 pub fn labeled_field(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, caption: &str, id: Id, value: &mut String, hint: &str, invalid: bool) -> bool {
     label(ui, th, pos, caption);
