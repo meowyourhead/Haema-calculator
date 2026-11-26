@@ -14,7 +14,8 @@
 #   sheet <Column>: text   the sheet's own wording, shown verbatim
 #                       (columns: A2, F, Hgb, RBC indices, C window, S window,
 #                        Fe, HbH inclusion body)
-#   <row>: rule [(assumed)] [(key)]   a matching criterion:
+#   <row>: rule [(flags)]   a matching criterion; flags are assumed, key or
+#                       both: (assumed), (key), (assumed, key)
 #     hba2, hbf          ranges in %:  A..B   A..<B   >A..<B   >A   <B
 #     peak               normal, split, degraded
 #     hb                 normal, low, markedly-low
@@ -25,6 +26,7 @@
 #     hba1c              normal, high
 #   A comma list means "any of". (assumed) = not in the sheet, implied by the
 #   comment. (key) = must be entered and matched for the comment to fit.
+#   [resources]         tab-wide links (only `link:` lines)
 #   Lines starting with # are notes.
 
 [1]

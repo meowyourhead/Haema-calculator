@@ -87,6 +87,13 @@ impl Inputs {
         self.sel[row.index()] = if was { None } else { Some(i) };
     }
 
+    /// Call after the user edits a number box: typing replaces any chip choice.
+    pub fn number_edited(&mut self, row: Row) {
+        if row.is_numeric() {
+            self.sel[row.index()] = None;
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.hba2.trim().is_empty() && self.hbf.trim().is_empty() && self.film == 0 && self.sel.iter().all(Option::is_none)
     }
@@ -135,7 +142,8 @@ fn outcome(c: &Criterion, v: Option<Value>) -> Outcome {
     };
     let hit = match (&c.rule, v) {
         (Rule::Range(r), Value::Num(x)) => r.contains(x),
-        (Rule::Range(r), Value::Span(s)) => r.overlaps(&s),
+        // a single-point criterion (HbF 100 %) matches any chip that contains it
+        (Rule::Range(r), Value::Span(s)) => r.overlaps(&s) || (r.lo == r.hi && s.contains(r.lo)),
         (Rule::AnyOf(m), Value::Opts(o)) => m & o != 0,
         _ => false,
     };
@@ -389,5 +397,27 @@ mod tests {
         let entry = lib.entries.iter().find(|e| e.code == 6).unwrap();
         assert_eq!(hint(six, entry).as_deref(), Some("needs Hb: Low"));
         assert!(s.also.len() <= 3);
+    }
+
+    #[test]
+    fn code12_homozygous_reachable_by_chips() {
+        let mut i = Inputs::default();
+        i.click_chip(Row::Hba2, 0); // Low
+        i.click_chip(Row::Hbf, 3); // >50
+        i.click_chip(Row::Indices, 0); // Normal
+        let s = suggest(library(), &i);
+        assert_eq!(s.top.iter().map(|e| (e.code, e.set)).collect::<Vec<_>>(), vec![(12, 0)]);
+    }
+
+    #[test]
+    fn deleting_number_does_not_restore_old_chip() {
+        let mut i = Inputs::default();
+        i.click_chip(Row::Hba2, 1); // Normal
+        i.hba2 = "3.7".into();
+        i.number_edited(Row::Hba2);
+        i.hba2.clear();
+        i.number_edited(Row::Hba2);
+        assert!((0..5).all(|k| !i.chip_selected(Row::Hba2, k)));
+        assert!(i.value(Row::Hba2).is_none());
     }
 }
