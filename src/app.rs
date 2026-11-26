@@ -11,6 +11,7 @@ pub enum Tab {
     Fbc,
     Retic,
     PtAptt,
+    Hbel,
 }
 
 pub struct ParamDef {
@@ -71,6 +72,7 @@ pub struct App {
     /// Theme popover (opened from the title bar's Theme button).
     pub menu_open: bool,
     pub menu_btn: Rect,
+    pub hbel: crate::hbel_panel::HbelState,
     genshin_backdrop: egui::TextureHandle,
     pokemon_backdrop: egui::TextureHandle,
     styled: Option<(Palette, bool)>,
@@ -140,6 +142,7 @@ impl App {
             dil: Default::default(),
             menu_open: false,
             menu_btn: Rect::NOTHING,
+            hbel: Default::default(),
             genshin_backdrop,
             pokemon_backdrop,
             styled: None,
@@ -190,6 +193,7 @@ impl App {
                         Tab::Retic => tmp.retic_panel(ui, &th, o, w),
                         Tab::Fbc => tmp.checker_panel(ui, &th, o, w, true),
                         Tab::PtAptt => tmp.checker_panel(ui, &th, o, w, false),
+                        Tab::Hbel => tmp.hbel_panel(ui, &th, o, w),
                     };
                     if pass > 0 {
                         size = size.max(vec2(w + 2.0 * PAGE_MARGIN, crate::chrome::CHROME_H + bottom + 2.0 * PAGE_MARGIN));
@@ -326,6 +330,8 @@ impl App {
             Tab::Fbc => self.fbc.third,
             Tab::PtAptt => self.pt.third,
             Tab::Retic => self.ref_open || self.calc_open,
+            // HBEL fills whatever width the window has and scrolls.
+            Tab::Hbel => false,
         };
         let (mut w, mut h) = (base.x, base.y);
         let need_h = crate::chrome::CHROME_H + content_h + 2.0 * PAGE_MARGIN;
@@ -494,6 +500,26 @@ impl eframe::App for App {
         crate::chrome::title_bar(self, ctx);
 
         let mut fit: Option<(f32, f32)> = None;
+        if self.tab == Tab::Hbel && self.hbel.source_open {
+            let screen_w = ctx.screen_rect().width();
+            egui::SidePanel::right("hbel-source-panel")
+                .resizable(true)
+                // half the window by default (the user can drag the edge)
+                .default_width((screen_w * 0.5).max(420.0))
+                .min_width(380.0)
+                .max_width((screen_w - 360.0).max(400.0))
+                .frame(egui::Frame::NONE.fill(th.bg).stroke(Stroke::new(1.0_f32, th.line_strong)))
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical().id_salt("hbel-source-scroll").auto_shrink([false, false]).drag_to_scroll(false).show(ui, |ui| {
+                        let o = ui.cursor().min + vec2(14.0, 24.0);
+                        let w = ui.available_width() - 28.0;
+                        let bottom = self.hbel_source(ui, &th, o, w);
+                        let top = ui.cursor().min;
+                        ui.allocate_rect(Rect::from_min_max(top, pos2(o.x + w, bottom + 40.0)), Sense::hover());
+                    });
+                });
+        }
+
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(th.bg)).show(ctx, |ui| {
             let screen = ui.max_rect();
             paint_page_background(ui, &th, screen, &self.genshin_backdrop, &self.pokemon_backdrop);
@@ -528,6 +554,7 @@ impl eframe::App for App {
                     Tab::Fbc => self.checker_panel(ui, &th, origin, content_w, true),
                     Tab::PtAptt => self.checker_panel(ui, &th, origin, content_w, false),
                     Tab::Retic => self.retic_panel(ui, &th, origin, content_w),
+                    Tab::Hbel => self.hbel_panel(ui, &th, origin, content_w),
                 };
                 let top = ui.cursor().min;
                 ui.allocate_rect(Rect::from_min_max(top, pos2(ui.max_rect().right(), bottom + PAGE_MARGIN)), Sense::hover());
@@ -995,6 +1022,7 @@ impl App {
                     self.tab = match v {
                         "retic" => Tab::Retic,
                         "pt" => Tab::PtAptt,
+                        "hbel" => Tab::Hbel,
                         _ => Tab::Fbc,
                     }
                 }
@@ -1023,6 +1051,28 @@ impl App {
                         self.shot.goal = Some(pos2(xy[0], xy[1]));
                     }
                 }
+                "hbelfill" if v == "1" => {
+                    use crate::hbel_data::Row;
+                    let i = &mut self.hbel.inputs;
+                    i.hba2 = "3.7".into();
+                    i.hbf = "0.5".into();
+                    i.click_chip(Row::Hb, 0);
+                    i.click_chip(Row::Indices, 0);
+                }
+                "hbeltie" if v == "1" => {
+                    self.hbel.inputs.hba2 = "2.8".into();
+                    self.hbel.inputs.hbf = "3".into();
+                }
+                "hbelsplit" if v == "1" => {
+                    use crate::hbel_data::Row;
+                    let i = &mut self.hbel.inputs;
+                    i.hbf = "0.5".into();
+                    i.click_chip(Row::Peak, 1);
+                    i.click_chip(Row::Hb, 0);
+                    i.click_chip(Row::Indices, 0);
+                }
+                "hbelsrc" => self.hbel.source_open = v == "1",
+                "hbeladd" => self.hbel.demo_form(v == "2"),
                 _ => {}
             }
         }
