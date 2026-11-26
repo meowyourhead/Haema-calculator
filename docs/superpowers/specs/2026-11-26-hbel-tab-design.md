@@ -75,7 +75,7 @@ Wide window: two columns. Narrow window (content width under ~900 pt): the
 "Suggested comment" card stacks below the "Results" card.
 
 ```
-[ Clear ]                                                        (toolbar, right-aligned)
+[ View source sheet ]  [ Clear ]                                (toolbar, right-aligned)
 ┌ Results ─────────────────────────────────┐ ┌ Suggested comment ─────────── [Copy] ┐
 │ HbA2 %   [ 3.7 ]  Low · Normal · (Borderline) · Raised · >10                      │
 │ HbA2 peak         Normal · Split · Degradation / co-eluting                      │
@@ -94,10 +94,6 @@ Wide window: two columns. Narrow window (content width under ~900 pt): the
                                              ├ Also possible ───────────────────────────┤
                                              │ Code 20 — if HbF: Slightly elevated     │
                                              └──────────────────────────────────────────┘
-┌ All HBEL comments (collapsed by default) ─────────────────────────────────────────┐
-│ 1  HbA present. No abnormal haemoglobin detected.                       [Copy] ▸ │
-│ …                                                                                 │
-└───────────────────────────────────────────────────────────────────────────────────┘
 Reference ranges: HbA2 2.2–3.4 %, HbF 0–1.3 %   ·   Library of variants (Bio-Rad) ↗
 ```
 
@@ -243,11 +239,50 @@ HbA2 5 % and HbF exactly 5.0 with Hb low and micro/hypo indices → 5 and 6 tie.
   sections that have content.
 - Matched rows are ticked; conflicting rows (in near misses) highlighted.
 
-### 5.6 "All HBEL comments" card
+### 5.6 Source sheet view
 
-Collapsed by default. Lists codes 1, 3–26 in order with the comment text and a Copy
-button; expanding a row shows the same details as the suggested card. For reference
-and training.
+A **View source sheet** button in the HBEL toolbar switches the tab to a full-width
+view of the spreadsheet's content in the app's own layout; **← Back to results**
+returns. Entered results are kept while switching. (This replaces the earlier
+"All HBEL comments" card, to avoid two lists of the same comments.)
+
+Content — "as the sheet says, tidied" (decided):
+- Comment text is the cleaned §6 version; code 2, the yellow highlighting and the
+  "not added to LabWare" note are left out. **Copy** always copies the §6 text.
+- Criteria, remarks, example cases and links are shown **verbatim** from the sheet
+  (sheet wording, not the machine meanings or *(assumed)* values of §5.4).
+- Blank sheet cells are omitted, so each card shows only what the sheet says.
+
+Layout — one compact card per code, in code order:
+
+```
+[Search…            ]  Filter: All · Normal & borderline · HbF · Thalassaemia · Variants
+                                          Reference: HbA2 2.2–3.4 % · HbF 0–1.3 %
+┌───┬─────────────────────────────────────────────────────────────────────────────┐
+│ 5 │ HbA present. Suggestive of Beta Thalassemia Minor. Please correlate … [Copy] │
+│   │ HbA2  High 4-8 %   HbF  0.1-5%   Hgb  Low to Normal   RBC indices  Micro/Hypo │
+│   │ C window (-)   S window (-)   Fe  Low to Normal   HbH inclusion body  Not Det. │
+├───┼─────────────────────────────────────────────────────────────────────────────┤
+│12 │ HbA present. Suspected Hereditary persistence of … (HPFH) …           [Copy] │
+│   │ Homozygous    A2 Absent/Low · F 100% (Homozygous) · RBC indices Normal        │
+│   │ Heterozygous  A2 Absent/Low · F ~1 to ~30% (Heterozygous) · Hgb Normal/…      │
+│   │ Example cases  [sample ID], [sample ID]    Links  News-Medical ↗   PMC7983139 ↗     │
+└───┴─────────────────────────────────────────────────────────────────────────────┘
+                                                   Library of variants (Bio-Rad) ↗
+```
+
+- Field labels use the sheet's column names (A2, F, Hgb, RBC indices, C window,
+  S window, Fe, HbH inclusion body, Remarks); the comment is the card's headline.
+- **Search** matches any text on a card (comment, criteria, remarks, sample IDs such
+  as [sample ID], link titles), case-insensitive.
+- **Filter** chips (single-select, "All" by default) group the codes *(designer's
+  call, overlaps allowed)*: Normal & borderline = 1, 16, 17, 19, 20, 23, 25;
+  HbF = 12, 15, 17, 18, 20, 21, 23; Thalassaemia = 3, 4, 5, 6, 7, 24, 25;
+  Variants = 8, 9, 10, 11, 13, 14, 18, 22, 24, 26.
+- Clicking a card's code number goes back to the results view with that code shown
+  in the suggestion card, labelled "Viewing code N (not from your results)" until the
+  results change.
+- Search text and filter are kept for the session.
 
 ### 5.7 Footer
 
@@ -335,7 +370,9 @@ edit fails `cargo test` rather than the app.
   behaviours in §5.4; ties reported as ties; empty input → no suggestion; number
   boxes select the right chip at boundaries (2.19, 2.2, 3.4, 3.45, 3.5, 3.99, 4.0,
   10, 10.1; HbF 1.3, 1.31, 4.99, 5, 50, 50.1).
-- Manual/screenshot check of the tab in all three palettes, light and dark, wide and
+- Source sheet view: search finds codes by comment words and by sample ID; each
+  filter shows exactly its listed codes; Copy gives the §6 text.
+- Manual/screenshot check of the tab (results and source sheet views) in all three palettes, light and dark, wide and
   narrow, using the existing `screenshot` feature.
 
 ## 10. Other deliverables
@@ -347,5 +384,5 @@ edit fails `cargo test` rather than the app.
 
 Module layout (e.g. `src/hbel.rs` for data + matching, panel code in `panels.rs` or a
 new file); data-file syntax; exact spacing, chip sizes and colours within the existing
-theme; narrow-layout breakpoint; whether the "All comments" card remembers its
-expanded state during the session.
+theme; narrow-layout breakpoint; and the source sheet view's card spacing
+and column wrapping.
