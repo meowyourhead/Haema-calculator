@@ -18,7 +18,7 @@ See `RELEASING.md` for the commit, push and release rules used by this project.
 
 ## Features
 
-- Frameless window with a centered title bar: **FBC / Retic / PT / APTT / Dilution** tabs plus
+- Frameless window with a centered title bar: **FBC / Retic / PT / APTT / Dilution / HBEL** tabs plus
   custom minimize / maximize / close controls. Drag the empty part of the strip to move the window,
   double-click it to maximize, and drag any edge or corner to resize.
 - The sidebar is now just the theme / palette controls (the page tabs live in the title bar).
@@ -32,6 +32,10 @@ See `RELEASING.md` for the commit, push and release rules used by this project.
   rounding notes and a step-by-step calculations panel.
 - **Counting helper** with 3–12 attempts and a "Use as retic %" action.
 - **Dilution** calculator for 1:2 diluted samples (calculated neat = ×2).
+- **HBEL** comment helper: pick results (or type HbA2 / HbF %) to get the matching LabWare
+  comment with its criteria, remarks, example cases and links; **View source sheet** shows the
+  original spreadsheet content with search and filters. Comments live in
+  `assets/hbel_comments.txt` (edit, then rebuild). Links open in the default browser.
 - Three palettes — **Default**, **Genshin**, **Pokémon** — each with light and dark variants.
   Genshin uses a soft, pre-blurred world backdrop (baked from the saved Game UI Database
   reference), gold hairlines and ivory/gold pill controls. Pokémon follows the Let's Go,
