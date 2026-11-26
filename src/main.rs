@@ -3,6 +3,7 @@
 mod app;
 mod chrome;
 mod fonts;
+mod hbel_data;
 mod logic;
 mod panels;
 mod reference;
