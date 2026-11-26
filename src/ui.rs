@@ -495,6 +495,62 @@ pub fn chip(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, s: &str, role: Role,
     rect
 }
 
+/// Wrapped paragraph the user can select and copy (Ctrl+C). Returns its rect.
+#[allow(clippy::too_many_arguments)]
+pub fn selectable_paragraph(ui: &mut Ui, th: &Theme, pos: Pos2, width: f32, s: &str, role: Role, size: f32, color: Color32, line: f32) -> Rect {
+    let mut job = LayoutJob::single_section(
+        s.to_owned(),
+        TextFormat { font_id: th.font(role, size), color, line_height: Some(size * line), ..Default::default() },
+    );
+    job.wrap.max_width = width;
+    let h = ui.fonts(|f| f.layout_job(job.clone())).size().y;
+    let rect = Rect::from_min_size(pos, vec2(width, h));
+    ui.scope_builder(UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Min)), |ui| {
+        ui.add(egui::Label::new(job).selectable(true).wrap());
+    });
+    rect
+}
+
+/// Position (relative to the paragraph's top-left) of the end of its last line,
+/// as (x of the line end, y of the line's vertical centre), plus the paragraph height.
+pub fn text_end(ui: &Ui, th: &Theme, width: f32, s: &str, role: Role, size: f32, line: f32) -> (Pos2, f32) {
+    let mut job = LayoutJob::single_section(
+        s.to_owned(),
+        TextFormat { font_id: th.font(role, size), color: Color32::WHITE, line_height: Some(size * line), ..Default::default() },
+    );
+    job.wrap.max_width = width;
+    let g = ui.fonts(|f| f.layout_job(job));
+    let end = g.rows.last().map_or(pos2(0.0, size * line / 2.0), |r| pos2(r.rect.right(), r.rect.center().y));
+    (end, g.size().y)
+}
+
+const COPY_ICON_W: f32 = 13.0;
+
+/// Width of a `copy_button` with this label.
+pub fn copy_button_width(ui: &Ui, th: &Theme, label: &str) -> f32 {
+    COPY_ICON_W + 5.0 + text_width(ui, th, label, Role::SansB, 12.0)
+}
+
+/// "⧉ Copy" text button with a drawn copy icon; `left_mid` is its left edge, vertically centred.
+pub fn copy_button(ui: &mut Ui, th: &Theme, left_mid: Pos2, label: &str, id: Id) -> Response {
+    let w = copy_button_width(ui, th, label);
+    let rect = Rect::from_min_size(pos2(left_mid.x, left_mid.y - 9.0), vec2(w, 18.0));
+    let resp = ui.interact(rect.expand(3.0), id, Sense::click()).on_hover_text("Copy comment");
+    let c = if resp.hovered() { th.accent_dark } else { th.accent };
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let p = ui.painter();
+    // two overlapping sheets
+    let back = Rect::from_min_size(pos2(rect.left() + 3.5, rect.center().y - 6.5), vec2(8.5, 10.0));
+    let front = Rect::from_min_size(pos2(rect.left() + 0.5, rect.center().y - 3.5), vec2(8.5, 10.0));
+    p.rect_stroke(back, cr(2.0), Stroke::new(1.3, c), StrokeKind::Middle);
+    p.rect_filled(front, cr(2.0), th.surface);
+    p.rect_stroke(front, cr(2.0), Stroke::new(1.3, c), StrokeKind::Middle);
+    text(ui, th, pos2(rect.left() + COPY_ICON_W + 5.0, rect.center().y), Align2::LEFT_CENTER, label, Role::SansB, 12.0, c);
+    resp
+}
+
 pub const CHIP_H: f32 = 30.0;
 
 /// Width a `chip_button` with this label will take.

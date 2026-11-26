@@ -101,11 +101,7 @@ fn button_at(ui: &mut Ui, th: &Theme, right_top: Pos2, label_s: &str, kind: Btn)
 
 impl App {
     pub fn hbel_panel(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
-        if self.hbel.source_open {
-            self.hbel_source(ui, th, origin, w)
-        } else {
-            self.hbel_results(ui, th, origin, w)
-        }
+        self.hbel_results(ui, th, origin, w)
     }
 
     /// Copy feedback: the code whose Copy button should read "Copied".
@@ -123,20 +119,17 @@ impl App {
         self.hbel.copied = Some((code, ui.input(|i| i.time)));
     }
 
-    fn hbel_source(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
-        // header: back button, search, filters
-        let back_r = Rect::from_min_size(origin, vec2(220.0, 36.0));
-        let mut child = ui.new_child(UiBuilder::new().max_rect(back_r).layout(Layout::left_to_right(Align::Min)));
-        if button(&mut child, th, "← Back to results", Btn::Secondary, true).clicked() {
+    /// The source sheet, drawn in the right-hand side panel.
+    pub fn hbel_source(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
+        // header: title + close, then search and filters
+        text_ls(ui, th, pos2(origin.x, origin.y + 18.0), Align2::LEFT_CENTER, "Source sheet", Role::Display, 18.0, th.text, -0.01);
+        if button_at(ui, th, pos2(origin.x + w, origin.y), "Close", Btn::Secondary).clicked() {
             self.hbel.source_open = false;
         }
-        let bw = child.min_rect().width();
-        let sx = origin.x + bw + 14.0;
-        let sw = (w - bw - 14.0).min(420.0);
-        let sr = Rect::from_min_size(pos2(sx, origin.y - 2.0), vec2(sw, FIELD_H));
+        let sr = Rect::from_min_size(pos2(origin.x, origin.y + 36.0 + 14.0), vec2(w.min(460.0), FIELD_H));
         text_field(ui, th, sr, Id::new("hbel-search"), &mut self.hbel.search, "Search comments, criteria, sample IDs…", false);
 
-        let mut y = origin.y + FIELD_H + 14.0;
+        let mut y = sr.bottom() + 12.0;
         let mut x = origin.x;
         let mut pick: Option<Option<Group>> = None;
         let filters: Vec<(Option<Group>, &str)> = std::iter::once((None, "All")).chain(GROUPS.iter().map(|g| (Some(*g), g.label()))).collect();
@@ -174,7 +167,6 @@ impl App {
         }
         if let Some(code) = view_req {
             self.hbel.view_code(code);
-            self.hbel.source_open = false;
         }
         ui.allocate_rect(Rect::from_min_max(origin, pos2(origin.x + w, y)), Sense::hover());
         y
@@ -188,7 +180,8 @@ impl App {
             if button(ui, th, "Clear", Btn::Secondary, true).clicked() {
                 clear = true;
             }
-            if button(ui, th, "View source sheet", Btn::Secondary, true).clicked() {
+            let src_label = if self.hbel.source_open { "Hide source sheet" } else { "Show source sheet" };
+            if button(ui, th, src_label, Btn::Secondary, true).clicked() {
                 open_src = true;
             }
         });
@@ -196,7 +189,7 @@ impl App {
             self.hbel.clear();
         }
         if open_src {
-            self.hbel.source_open = true;
+            self.hbel.source_open = !self.hbel.source_open;
         }
 
         let wide = w >= 900.0;
@@ -463,6 +456,18 @@ pub(crate) fn notes_text(e: &Entry) -> String {
     out.join("\n")
 }
 
+/// Layout of a comment cell: where the copy button goes (left-middle, relative to the
+/// cell's text origin) and the cell's text height including the button.
+fn comment_cell(ui: &Ui, th: &Theme, width: f32, comment: &str, copy_label: &str) -> (Pos2, f32) {
+    let (end, h) = text_end(ui, th, width, comment, Role::Serif, 13.6, 1.4);
+    let bw = copy_button_width(ui, th, copy_label);
+    if end.x + 10.0 + bw <= width {
+        (pos2(end.x + 10.0, end.y), h)
+    } else {
+        (pos2(0.0, h + 11.0), h + 22.0)
+    }
+}
+
 /// The source sheet as a table (scrolls sideways when narrow). Returns the bottom y.
 #[allow(clippy::too_many_arguments)]
 fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], copied: Option<u8>, copy_req: &mut Option<u8>, view_req: &mut Option<u8>) -> f32 {
@@ -481,8 +486,8 @@ fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], cop
     let row_h: Vec<f32> = rows
         .iter()
         .map(|e| {
-            let mut h = CHIP_H + 24.0; // code chip + copy link
-            h = h.max(paragraph_height(ui, th, wrap(1), &e.comment, Role::Serif, 13.6, 1.4));
+            let mut h = CHIP_H;
+            h = h.max(comment_cell(ui, th, wrap(1), &e.comment, "Copied").1);
             for (k, (col, _)) in TABLE_COLS.iter().enumerate() {
                 h = h.max(paragraph_height(ui, th, wrap(k + 2), &cell_text(e, col), Role::Sans, CELL_FONT, 1.4));
             }
@@ -520,33 +525,34 @@ fn source_table(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, rows: &[&Entry], cop
                 p.line_segment([pos2(o.x, y), pos2(o.x + tw, y)], Stroke::new(1.0_f32, th.line));
                 let top = y + CELL_PAD;
                 let mut x = o.x;
-                // code: chip opens it in the results view; Copy underneath
-                let (cr_, resp) = chip_button(ui, th, pos2(x + CELL_PAD, top), &e.code.to_string(), true, Id::new(("hbel-src-code", e.code)));
-                if resp.on_hover_text("Open in the results view").clicked() {
+                // code: chip opens it in the results view
+                let (_, resp) = chip_button(ui, th, pos2(x + CELL_PAD, top), &e.code.to_string(), true, Id::new(("hbel-src-code", e.code)));
+                if resp.on_hover_text("Show in the results view").clicked() {
                     *view_req = Some(e.code);
                 }
+                x += widths[0];
+                // comment (selectable) with the copy button after its last word
+                let cpos = pos2(x + CELL_PAD, top);
+                selectable_paragraph(ui, th, cpos, wrap(1), &e.comment, Role::Serif, 13.6, th.text, 1.4);
                 let cl = if copied == Some(e.code) { "Copied" } else { "Copy" };
-                let cg = text(ui, th, pos2(x + CELL_PAD, cr_.bottom() + 6.0), Align2::LEFT_TOP, cl, Role::SansB, 12.0, th.accent);
-                let cresp = ui.interact(cg.expand(3.0), Id::new(("hbel-src-copy", e.code)), Sense::click());
-                if cresp.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-                if cresp.clicked() {
+                let (at, _) = comment_cell(ui, th, wrap(1), &e.comment, cl);
+                if copy_button(ui, th, cpos + at.to_vec2(), cl, Id::new(("hbel-src-copy", e.code))).clicked() {
                     *copy_req = Some(e.code);
                 }
-                x += widths[0];
-                paragraph(ui, th, pos2(x + CELL_PAD, top), wrap(1), &e.comment, Role::Serif, 13.6, th.text, 1.4);
                 x += widths[1];
                 for (k, (col, _)) in TABLE_COLS.iter().enumerate() {
                     let t = cell_text(e, col);
-                    let (s, c) = if t.is_empty() { ("—".to_string(), th.muted) } else { (t, th.text) };
-                    paragraph(ui, th, pos2(x + CELL_PAD, top), wrap(k + 2), &s, Role::Sans, CELL_FONT, c, 1.4);
+                    if t.is_empty() {
+                        text(ui, th, pos2(x + CELL_PAD, top), Align2::LEFT_TOP, "—", Role::Sans, CELL_FONT, th.muted);
+                    } else {
+                        selectable_paragraph(ui, th, pos2(x + CELL_PAD, top), wrap(k + 2), &t, Role::Sans, CELL_FONT, th.text, 1.4);
+                    }
                     x += widths[k + 2];
                 }
                 let notes = notes_text(e);
                 let mut ny = top;
                 if !notes.is_empty() {
-                    ny = paragraph(ui, th, pos2(x + CELL_PAD, top), wrap(widths.len() - 1), &notes, Role::Sans, 12.2, th.text, 1.4).bottom() + 4.0;
+                    ny = selectable_paragraph(ui, th, pos2(x + CELL_PAD, top), wrap(widths.len() - 1), &notes, Role::Sans, 12.2, th.text, 1.4).bottom() + 4.0;
                 }
                 for l in &e.links {
                     ny = link(ui, th, pos2(x + CELL_PAD, ny), l, wrap(widths.len() - 1)).bottom() + 4.0;
