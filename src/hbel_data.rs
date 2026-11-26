@@ -49,7 +49,7 @@ static HBF_OPTS: [Opt; 4] = [
 ];
 static PEAK_OPTS: [Opt; 3] = [o("normal", "Normal"), o("split", "Split"), o("degraded", "Degradation / co-eluting")];
 static HB_OPTS: [Opt; 3] = [o("normal", "Normal"), o("low", "Low"), o("markedly-low", "Markedly low (<7)")];
-static IND_OPTS: [Opt; 3] = [o("normal", "Normal"), o("micro-hypo", "Micro/Hypo"), o("marked", "Markedly decreased")];
+static IND_OPTS: [Opt; 2] = [o("normal", "Normal"), o("micro-hypo", "Micro/Hypo")];
 static FILM_OPTS: [Opt; 4] = [o("target", "Target cells"), o("sphero", "Spherocytes"), o("sickle", "Sickle cells"), o("poikilo", "Marked poikilocytosis")];
 static WIN_OPTS: [Opt; 2] = [o("neg", "(−)"), o("present", "Present")];
 static HBH_OPTS: [Opt; 2] = [o("not-detected", "Not detected"), o("detected", "Detected")];
@@ -665,5 +665,11 @@ mod tests {
     fn bom_is_ignored() {
         let lib = parse(&format!("\u{feff}{}", MINI)).unwrap();
         assert_eq!(lib.entries[0].code, 16);
+    }
+
+    #[test]
+    fn indices_options_are_normal_and_micro_hypo() {
+        let keys: Vec<&str> = Row::Indices.options().iter().map(|o| o.key).collect();
+        assert_eq!(keys, vec!["normal", "micro-hypo"]);
     }
 }
