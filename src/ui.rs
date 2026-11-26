@@ -608,6 +608,15 @@ pub enum FieldState {
     Flagged,
 }
 
+pub const FIELD_H: f32 = 40.0;
+pub const LABEL_H: f32 = 13.0;
+pub const LABEL_GAP: f32 = 7.0;
+
+/// Uppercase caption above a control.
+pub fn label(ui: &Ui, th: &Theme, pos: Pos2, s: &str) {
+    text_ls(ui, th, pos, Align2::LEFT_TOP, &s.to_uppercase(), Role::SansB, 10.88, th.muted, 0.03);
+}
+
 /// Number field at an exact rectangle. Returns whether the text changed.
 pub fn field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hint: &str, invalid: bool) -> bool {
     field_s(ui, th, rect, id, value, hint, if invalid { FieldState::Invalid } else { FieldState::Normal })
@@ -615,6 +624,17 @@ pub fn field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hi
 
 /// `field` with an explicit attention state.
 pub fn field_s(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hint: &str, state: FieldState) -> bool {
+    field_impl(ui, th, rect, id, value, hint, state, true)
+}
+
+/// Same look and Tab order as `field`, but keeps every character typed
+/// (search boxes, and number boxes that must reject "3,5" rather than read 35).
+pub fn text_field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hint: &str, invalid: bool) -> bool {
+    field_impl(ui, th, rect, id, value, hint, if invalid { FieldState::Invalid } else { FieldState::Normal }, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn field_impl(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hint: &str, state: FieldState, numeric: bool) -> bool {
     let invalid = state == FieldState::Invalid;
     let flagged = state == FieldState::Flagged;
     // Record every field in draw order so Tab / Enter can walk them predictably.
@@ -733,7 +753,45 @@ pub fn field_s(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, 
             .hint_text(RichText::new(hint).color(hint_c))
             .vertical_align(Align::Center),
     );
-    value.retain(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'));
+    if numeric {
+        value.retain(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'));
+    }
+    *value != before
+}
+
+/// Caption + unfiltered text field stacked.
+#[allow(clippy::too_many_arguments)]
+pub fn labeled_text_field(ui: &mut Ui, th: &Theme, pos: Pos2, w: f32, caption: &str, id: Id, value: &mut String, hint: &str) -> bool {
+    label(ui, th, pos, caption);
+    let r = Rect::from_min_size(pos + vec2(0.0, LABEL_H + LABEL_GAP), vec2(w, FIELD_H));
+    text_field(ui, th, r, id, value, hint, false)
+}
+
+/// Multi-line text box in the same style as `field`. Returns whether the text changed.
+pub fn text_area(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hint: &str) -> bool {
+    let focused = ui.memory(|m| m.has_focus(id));
+    let p = ui.painter().clone();
+    let r = if th.palette == Palette::Pokemon { 12.0 } else { th.radius };
+    let bg = if th.palette == Palette::Pokemon { th.field } else if focused { th.surface } else { th.bg };
+    let border = if focused { if th.palette == Palette::Genshin { th.gold } else { th.accent } } else { th.line_strong };
+    fill(&p, rect, r, bg);
+    stroke_in(&p, rect, r, 1.0, border);
+    let inner = rect.shrink2(vec2(11.0, 8.0));
+    let mut child = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::top_down(Align::Min)));
+    let before = value.clone();
+    egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height(inner.height()).show(&mut child, |ui| {
+        ui.add(
+            TextEdit::multiline(value)
+                .id(id)
+                .frame(false)
+                .margin(Margin::ZERO)
+                .desired_width(inner.width())
+                .desired_rows(3)
+                .font(th.font(Role::Serif, 14.5))
+                .text_color(th.text)
+                .hint_text(RichText::new(hint).color(th.muted)),
+        );
+    });
     *value != before
 }
 
@@ -830,6 +888,84 @@ pub fn chip(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, s: &str, role: Role,
     }
     paint_galley(p, th, role, rect.min + pad, g, fg);
     rect
+}
+
+/// Wrapped paragraph the user can select and copy (Ctrl+C). Returns its rect.
+#[allow(clippy::too_many_arguments)]
+pub fn selectable_paragraph(ui: &mut Ui, th: &Theme, pos: Pos2, width: f32, s: &str, role: Role, size: f32, color: Color32, line: f32) -> Rect {
+    let mut job = LayoutJob::single_section(
+        s.to_owned(),
+        TextFormat { font_id: th.font(role, size), color, line_height: Some(size * line), ..Default::default() },
+    );
+    job.wrap.max_width = width;
+    let h = ui.fonts(|f| f.layout_job(job.clone())).size().y;
+    let rect = Rect::from_min_size(pos, vec2(width, h));
+    ui.scope_builder(UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Min)), |ui| {
+        ui.add(egui::Label::new(job).selectable(true).wrap());
+    });
+    rect
+}
+
+const COPY_ICON_W: f32 = 13.0;
+
+/// Width of a `copy_button` with this label.
+pub fn copy_button_width(ui: &Ui, th: &Theme, label: &str) -> f32 {
+    COPY_ICON_W + 5.0 + text_width(ui, th, label, Role::SansB, 12.0)
+}
+
+/// "⧉ Copy" text button with a drawn copy icon; `left_mid` is its left edge, vertically centred.
+pub fn copy_button(ui: &mut Ui, th: &Theme, left_mid: Pos2, label: &str, id: Id) -> Response {
+    let w = copy_button_width(ui, th, label);
+    let rect = Rect::from_min_size(pos2(left_mid.x, left_mid.y - 9.0), vec2(w, 18.0));
+    let resp = ui.interact(rect.expand(3.0), id, Sense::click()).on_hover_text("Copy comment");
+    let c = if resp.hovered() { th.accent_dark } else { th.accent };
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let p = ui.painter();
+    // two overlapping sheets
+    let back = Rect::from_min_size(pos2(rect.left() + 3.5, rect.center().y - 6.5), vec2(8.5, 10.0));
+    let front = Rect::from_min_size(pos2(rect.left() + 0.5, rect.center().y - 3.5), vec2(8.5, 10.0));
+    p.rect_stroke(back, cr(2.0), Stroke::new(1.3_f32, c), StrokeKind::Middle);
+    p.rect_filled(front, cr(2.0), th.surface);
+    p.rect_stroke(front, cr(2.0), Stroke::new(1.3_f32, c), StrokeKind::Middle);
+    text(ui, th, pos2(rect.left() + COPY_ICON_W + 5.0, rect.center().y), Align2::LEFT_CENTER, label, Role::SansB, 12.0, c);
+    resp
+}
+
+pub const CHIP_H: f32 = 30.0;
+
+/// Width a `chip_button` with this label will take.
+pub fn chip_button_width(ui: &Ui, th: &Theme, label: &str) -> f32 {
+    text_width(ui, th, label, Role::SansB, 12.48).ceil() + 24.0
+}
+
+/// Clickable, toggle-style pill with its top-left corner at `pos`.
+pub fn chip_button(ui: &mut Ui, th: &Theme, pos: Pos2, label: &str, selected: bool, id: Id) -> (Rect, Response) {
+    let rect = Rect::from_min_size(pos, vec2(chip_button_width(ui, th, label), CHIP_H));
+    let resp = ui.interact(rect, id, Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let sel_border = match th.palette {
+        Palette::Genshin => th.gold,
+        Palette::Pokemon => th.ring,
+        Palette::Default | Palette::Cyberpunk => th.accent,
+    };
+    let (bg, border, fg, bw) = if selected {
+        (th.accent_soft, sel_border, th.text, 1.5)
+    } else if resp.hovered() {
+        (th.surface2, th.line_strong, th.text, 1.0)
+    } else {
+        (Color32::TRANSPARENT, th.line, th.muted, 1.0)
+    };
+    let p = ui.painter();
+    fill(p, rect, pill(), bg);
+    stroke_in(p, rect, pill(), bw, border);
+    let g = galley(ui, th, label, Role::SansB, 12.48, fg, 0.0, f32::INFINITY);
+    let at = pos2(rect.center().x - g.size().x / 2.0, rect.center().y - g.size().y / 2.0);
+    paint_galley(ui.painter(), th, Role::SansB, at, g, fg);
+    (rect, resp)
 }
 
 /// Status glyph + label ("✓ Acceptable", "! Flagged"), right-aligned at `right_mid`.

@@ -19,10 +19,11 @@ const TAB_FONT: f32 = 14.5;
 const BTN_W: f32 = 46.0;
 const CLOSE_W: f32 = 62.0;
 
-const TABS: [(Tab, &str); 3] = [
+const TABS: [(Tab, &str); 4] = [
     (Tab::Fbc, "FBC"),
     (Tab::Retic, "Retic"),
     (Tab::PtAptt, "PT / APTT"),
+    (Tab::Hbel, "HBEL"),
 ];
 
 /// Draw the title bar. Must be called before the central panel.

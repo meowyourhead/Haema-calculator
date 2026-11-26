@@ -25,7 +25,7 @@ See `RELEASING.md` for the commit, push and release rules used by this project.
 
 ## Features
 
-- Frameless window with a centered title bar: **FBC / Retic / PT / APTT** tabs plus
+- Frameless window with a centered title bar: **FBC / Retic / PT / APTT / HBEL** tabs plus
   custom minimize / maximize / close controls. Drag the empty part of the strip to move the window,
   double-click it to maximize, and drag any edge or corner to resize.
 - A **Theme** button in the title bar opens the dark-mode switch and palette list (Esc or a
@@ -44,6 +44,15 @@ See `RELEASING.md` for the commit, push and release rules used by this project.
   rounding notes and a step-by-step calculations panel.
 - **Counting helper** with 3–12 attempts and a "Use as retic %" action.
 - **Dilution** sheet under the FBC checker for 1:2 diluted samples (calculated neat = ×2).
+- **HBEL** comment helper: pick results (or type HbA2 / HbF %) to get the matching LabWare
+  comment with its criteria, remarks, example cases and links; **View source sheet** shows the
+  original spreadsheet content with search and filters. Comments live in
+  `assets/hbel_comments.txt` (edit, then rebuild). Links open in the default browser.
+- **Add new comment** (HBEL): saves a comment for a new kind of case, using the results entered
+  as its criteria, into a shared **`6. HBEL`** folder next to the `.exe` (one `HBEL-<code>.txt`
+  file per comment, codes from 27). The app asks before creating the folder. Every PC that runs
+  the app from that location sees the added comments; **Reload** in the source sheet re-reads
+  them, and deleting a file removes its comment.
 - Three palettes — **Default**, **Genshin**, **Pokémon** — each with light and dark variants.
   Genshin uses a soft, pre-blurred world backdrop (baked from the saved Game UI Database
   reference), gold hairlines, ivory/gold pill controls and the game's gold-star pointer set

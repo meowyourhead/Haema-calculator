@@ -5,6 +5,14 @@ use crate::theme::{hex, rgba, Palette, Role, Theme};
 use crate::ui::*;
 use eframe::egui::{self, pos2, vec2, Align, Align2, Color32, CornerRadius, Id, Layout, Pos2, Rect, Sense, Stroke, Ui, UiBuilder};
 
+pub(crate) fn toolbar(ui: &mut Ui, origin: Pos2, width: f32, f: impl FnOnce(&mut Ui)) -> f32 {
+    let r = Rect::from_min_size(origin, vec2(width, 36.0));
+    let mut child = ui.new_child(UiBuilder::new().max_rect(r).layout(Layout::right_to_left(Align::Min)));
+    child.spacing_mut().item_spacing.x = 10.0;
+    f(&mut child);
+    origin.y + 36.0 + 16.0
+}
+
 fn status_colors(th: &Theme, s: Status) -> Color32 {
     match s {
         Status::Ok => th.ok,
@@ -444,6 +452,7 @@ impl App {
             Tab::Fbc => (sheet_layout(ui, th, &FBC_PARAMS, self.fbc.third, self.sheet_room()).inner.max(dilution_natural(ui, th)) + CARD_CHROME).ceil(),
             Tab::PtAptt => (sheet_layout(ui, th, &PT_PARAMS, self.pt.third, self.sheet_room()).inner + CARD_CHROME).ceil(),
             Tab::Retic => self.retic_width(ui, th).ceil(),
+            Tab::Hbel => f32::INFINITY,
         }
     }
 }
