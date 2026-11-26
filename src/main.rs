@@ -4,6 +4,7 @@ mod app;
 mod chrome;
 mod fonts;
 mod hbel_data;
+mod hbel_match;
 mod logic;
 mod panels;
 mod reference;
