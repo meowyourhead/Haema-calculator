@@ -253,7 +253,12 @@ Content — "as the sheet says, tidied" (decided):
   (sheet wording, not the machine meanings or *(assumed)* values of §5.4).
 - Blank sheet cells are omitted, so each card shows only what the sheet says.
 
-Layout — one compact card per code, in code order:
+> **Update (26 Nov 2026, user request):** the source sheet view is now a **table** — one row per
+> code with columns Code · Comment · A2 · F · Hgb · RBC indices · C window · S window · Fe ·
+> HbH inclusion body · Notes & links (code 12's two sets stacked in each cell). It scrolls
+> sideways when the window is narrower than the table. The card layout below is superseded.
+
+Layout (original) — one compact card per code, in code order:
 
 ```
 [Search…            ]  Filter: All · Normal & borderline · HbF · Thalassaemia · Variants
