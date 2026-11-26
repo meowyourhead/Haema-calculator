@@ -390,6 +390,17 @@ pub fn label(ui: &Ui, th: &Theme, pos: Pos2, s: &str) {
 
 /// Number field at an exact rectangle. Returns whether the text changed.
 pub fn field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hint: &str, invalid: bool) -> bool {
+    field_impl(ui, th, rect, id, value, hint, invalid, true)
+}
+
+/// Same look and Tab order as `field`, but keeps every character typed
+/// (search boxes, and number boxes that must reject "3,5" rather than read 35).
+pub fn text_field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hint: &str, invalid: bool) -> bool {
+    field_impl(ui, th, rect, id, value, hint, invalid, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn field_impl(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hint: &str, invalid: bool, numeric: bool) -> bool {
     // Record every field in draw order so Tab / Enter can walk them predictably.
     ui.ctx().data_mut(|d| {
         d.get_temp_mut_or_default::<Vec<(Id, Rect)>>(Id::new("haem-field-order"))
@@ -452,7 +463,9 @@ pub fn field(ui: &mut Ui, th: &Theme, rect: Rect, id: Id, value: &mut String, hi
             .hint_text(RichText::new(hint).color(th.muted))
             .vertical_align(Align::Center),
     );
-    value.retain(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'));
+    if numeric {
+        value.retain(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'));
+    }
     *value != before
 }
 
@@ -480,6 +493,41 @@ pub fn chip(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, s: &str, role: Role,
     }
     paint_galley(p, th, role, rect.min + pad, g, fg);
     rect
+}
+
+pub const CHIP_H: f32 = 30.0;
+
+/// Width a `chip_button` with this label will take.
+pub fn chip_button_width(ui: &Ui, th: &Theme, label: &str) -> f32 {
+    text_width(ui, th, label, Role::SansB, 12.48).ceil() + 24.0
+}
+
+/// Clickable, toggle-style pill with its top-left corner at `pos`.
+pub fn chip_button(ui: &mut Ui, th: &Theme, pos: Pos2, label: &str, selected: bool, id: Id) -> (Rect, Response) {
+    let rect = Rect::from_min_size(pos, vec2(chip_button_width(ui, th, label), CHIP_H));
+    let resp = ui.interact(rect, id, Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let sel_border = match th.palette {
+        Palette::Genshin => th.gold,
+        Palette::Pokemon => th.ring,
+        Palette::Default => th.accent,
+    };
+    let (bg, border, fg, bw) = if selected {
+        (th.accent_soft, sel_border, th.text, 1.5)
+    } else if resp.hovered() {
+        (th.surface2, th.line_strong, th.text, 1.0)
+    } else {
+        (Color32::TRANSPARENT, th.line, th.muted, 1.0)
+    };
+    let p = ui.painter();
+    fill(p, rect, pill(), bg);
+    stroke_in(p, rect, pill(), bw, border);
+    let g = galley(ui, th, label, Role::SansB, 12.48, fg, 0.0, f32::INFINITY);
+    let at = pos2(rect.center().x - g.size().x / 2.0, rect.center().y - g.size().y / 2.0);
+    paint_galley(ui.painter(), th, Role::SansB, at, g, fg);
+    (rect, resp)
 }
 
 /// Status dot + label ("Acceptable" etc.), right-aligned at `right_mid`.

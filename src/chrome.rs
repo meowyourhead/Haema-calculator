@@ -22,11 +22,12 @@ const CLOSE_W: f32 = 62.0;
 const EDGE: f32 = 4.0;
 const CORNER: f32 = 10.0;
 
-const TABS: [(Tab, &str); 4] = [
+const TABS: [(Tab, &str); 5] = [
     (Tab::Fbc, "FBC"),
     (Tab::Retic, "Retic"),
     (Tab::PtAptt, "PT / APTT"),
     (Tab::Dilution, "Dilution"),
+    (Tab::Hbel, "HBEL"),
 ];
 
 /// Draw the title bar. Must be called before the central panel.
