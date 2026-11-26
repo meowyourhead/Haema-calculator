@@ -5,7 +5,7 @@ use crate::theme::{hex, rgba, Palette, Role, Theme};
 use crate::ui::*;
 use eframe::egui::{self, pos2, vec2, Align, Align2, Color32, CornerRadius, Id, Layout, Pos2, Rect, Sense, Stroke, Ui, UiBuilder};
 
-fn toolbar(ui: &mut Ui, origin: Pos2, width: f32, f: impl FnOnce(&mut Ui)) -> f32 {
+pub(crate) fn toolbar(ui: &mut Ui, origin: Pos2, width: f32, f: impl FnOnce(&mut Ui)) -> f32 {
     let r = Rect::from_min_size(origin, vec2(width, 36.0));
     let mut child = ui.new_child(UiBuilder::new().max_rect(r).layout(Layout::right_to_left(Align::Min)));
     child.spacing_mut().item_spacing.x = 10.0;

@@ -12,6 +12,7 @@ pub enum Tab {
     Retic,
     PtAptt,
     Dilution,
+    Hbel,
 }
 
 pub struct ParamDef {
@@ -74,6 +75,7 @@ pub struct App {
     pub retic_note: Option<String>,
     pub calc_open: bool,
     pub dil: [String; 5],
+    pub hbel: crate::hbel_panel::HbelState,
     genshin_backdrop: egui::TextureHandle,
     pokemon_backdrop: egui::TextureHandle,
     styled: Option<(Palette, bool)>,
@@ -107,6 +109,7 @@ impl App {
             retic_note: None,
             calc_open: false,
             dil: Default::default(),
+            hbel: Default::default(),
             genshin_backdrop: genshin_backdrop_texture(&cc.egui_ctx),
             pokemon_backdrop: pokemon_backdrop_texture(&cc.egui_ctx),
             styled: None,
@@ -247,6 +250,7 @@ impl eframe::App for App {
                     Tab::PtAptt => self.checker_panel(ui, &th, origin, content_w, false),
                     Tab::Retic => self.retic_panel(ui, &th, origin, content_w),
                     Tab::Dilution => self.dilution_panel(ui, &th, origin, content_w),
+                    Tab::Hbel => self.hbel_panel(ui, &th, origin, content_w),
                 };
                 let top = ui.cursor().min;
                 ui.allocate_rect(Rect::from_min_max(top, pos2(ui.max_rect().right(), bottom + 60.0)), Sense::hover());
@@ -524,6 +528,7 @@ impl App {
                         "retic" => Tab::Retic,
                         "pt" => Tab::PtAptt,
                         "dil" => Tab::Dilution,
+                        "hbel" => Tab::Hbel,
                         _ => Tab::Fbc,
                     }
                 }
@@ -536,6 +541,19 @@ impl App {
                     self.pt.third = v == "1";
                 }
                 "scroll" => self.shot.scroll = v.parse().unwrap_or(0.0),
+                "hbelfill" if v == "1" => {
+                    use crate::hbel_data::Row;
+                    let i = &mut self.hbel.inputs;
+                    i.hba2 = "3.7".into();
+                    i.hbf = "0.5".into();
+                    i.click_chip(Row::Hb, 0);
+                    i.click_chip(Row::Indices, 0);
+                }
+                "hbeltie" if v == "1" => {
+                    self.hbel.inputs.hba2 = "2.8".into();
+                    self.hbel.inputs.hbf = "3".into();
+                }
+                "hbelsrc" => self.hbel.source_open = v == "1",
                 _ => {}
             }
         }
