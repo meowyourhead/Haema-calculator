@@ -313,45 +313,33 @@ pub fn radial(p: &Painter, center: Pos2, rx: f32, ry: f32, color: Color32) {
     p.add(Shape::mesh(m));
 }
 
-pub fn sun_icon(p: &Painter, c: Pos2, color: Color32) {
-    let k = 16.0 / 24.0;
-    let st = Stroke::new(2.0 * k, color);
-    p.circle_stroke(c, 4.0 * k, st);
-    for i in 0..8 {
-        let a = i as f32 * std::f32::consts::FRAC_PI_4;
-        let (s, co) = a.sin_cos();
-        let d = vec2(s, -co);
-        p.line_segment([c + d * (8.0 * k), c + d * (10.0 * k)], st);
+/// A filled crescent moon of radius `r` centred on `c`, its bite toward the top right.
+/// Built as a strip between the outer arc and the bite's arc, tip to tip.
+pub fn crescent(p: &Painter, c: Pos2, r: f32, color: Color32) {
+    use std::f32::consts::PI;
+    let phi = -0.75_f32; // direction of the bite (screen y points down)
+    let (d, ri) = (0.62 * r, 0.82 * r);
+    let ci = c + vec2(phi.cos(), phi.sin()) * d;
+    // half-angles of the arcs between the two intersection points
+    let alpha = ((d * d + r * r - ri * ri) / (2.0 * d * r)).clamp(-1.0, 1.0).acos();
+    let beta = ((d * d + ri * ri - r * r) / (2.0 * d * ri)).clamp(-1.0, 1.0).acos();
+    let (s0, t0) = (PI - alpha, beta);
+    let back = phi + PI;
+    let n = 24;
+    let mut m = Mesh::default();
+    for i in 0..=n {
+        let f = i as f32 / n as f32;
+        let a = back - s0 + 2.0 * s0 * f;
+        let b = back - t0 + 2.0 * t0 * f;
+        m.colored_vertex(c + vec2(a.cos(), a.sin()) * r, color);
+        m.colored_vertex(ci + vec2(b.cos(), b.sin()) * ri, color);
     }
-}
-
-pub fn moon_icon(p: &Painter, c: Pos2, color: Color32) {
-    let k = 16.0 / 24.0;
-    let o = pos2(c.x - 12.0 * k, c.y - 12.0 * k);
-    let to = |x: f32, y: f32| pos2(o.x + x * k, o.y + y * k);
-    let (c1, r1) = ((12.0f32, 12.0f32), 9.04f32);
-    let (c2, r2) = ((16.8f32, 7.2f32), 7.0f32);
-    let mut pts: Vec<Pos2> = vec![];
-    // outer arc: points on circle 1 that lie outside circle 2
-    for i in 0..=72 {
-        let a = i as f32 / 72.0 * std::f32::consts::TAU;
-        let (x, y) = (c1.0 + r1 * a.cos(), c1.1 + r1 * a.sin());
-        if ((x - c2.0).powi(2) + (y - c2.1).powi(2)).sqrt() >= r2 - 0.05 {
-            pts.push(to(x, y));
-        }
+    for i in 0..n as u32 {
+        let (o0, i0, o1, i1) = (2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 3);
+        m.add_triangle(o0, i0, o1);
+        m.add_triangle(i0, i1, o1);
     }
-    // inner edge: points on circle 2 that lie inside circle 1
-    let mut inner = vec![];
-    for i in 0..=72 {
-        let a = i as f32 / 72.0 * std::f32::consts::TAU;
-        let (x, y) = (c2.0 + r2 * a.cos(), c2.1 + r2 * a.sin());
-        if ((x - c1.0).powi(2) + (y - c1.1).powi(2)).sqrt() <= r1 + 0.05 {
-            inner.push(to(x, y));
-        }
-    }
-    pts.extend(inner);
-    pts.push(pts[0]);
-    p.add(Shape::line(pts, Stroke::new(2.0 * k, color)));
+    p.add(Shape::mesh(m));
 }
 
 /// Small chamfered data-chip used by the Cyberpunk palette swatch.
@@ -367,22 +355,6 @@ pub fn cyber_chip(p: &Painter, c: Pos2, size: f32, fill: Color32, stroke: Color3
     ];
     p.add(Shape::convex_polygon(pts, fill, Stroke::new(1.0_f32, stroke)));
     p.rect_filled(Rect::from_center_size(c, vec2(size * 0.30, size * 0.30)), 0.0, dot);
-}
-
-/// 12×12 pixel pokéball.
-pub fn pokeball(p: &Painter, c: Pos2, size: f32, ink: Color32, red: Color32, white: Color32) {
-    let r = size / 2.0;
-    p.circle_filled(c, r, white);
-    let mut half = vec![];
-    for i in 0..=24 {
-        let a = std::f32::consts::PI + i as f32 / 24.0 * std::f32::consts::PI;
-        half.push(pos2(c.x + a.cos() * r, c.y + a.sin() * r));
-    }
-    p.add(Shape::convex_polygon(half, red, Stroke::NONE));
-    p.rect_filled(Rect::from_center_size(c, vec2(size, size * 0.13)), 0.0, ink);
-    p.circle_stroke(c, r, Stroke::new(1.0_f32, ink));
-    p.circle_filled(c, size * 0.19, white);
-    p.circle_stroke(c, size * 0.19, Stroke::new(1.0_f32, ink));
 }
 
 // ---------------------------------------------------------------------------
@@ -886,7 +858,9 @@ pub fn chip(ui: &Ui, th: &Theme, pos: Pos2, anchor: Align2, s: &str, role: Role,
             stroke_in(p, rect, radius, w, c);
         }
     }
-    paint_galley(p, th, role, rect.min + pad, g, fg);
+    // monospace digits sit high in their line box; centre the glyphs instead
+    let dy = if matches!(role, Role::Mono | Role::MonoB) { cap_center_offset(&g) } else { 0.0 };
+    paint_galley(p, th, role, rect.min + pad + vec2(0.0, dy), g, fg);
     rect
 }
 
@@ -906,31 +880,55 @@ pub fn selectable_paragraph(ui: &mut Ui, th: &Theme, pos: Pos2, width: f32, s: &
     rect
 }
 
-const COPY_ICON_W: f32 = 13.0;
+/// Width of a `copy_button` (icon only).
+pub const COPY_BUTTON_W: f32 = 22.0;
 
-/// Width of a `copy_button` with this label.
-pub fn copy_button_width(ui: &Ui, th: &Theme, label: &str) -> f32 {
-    COPY_ICON_W + 5.0 + text_width(ui, th, label, Role::SansB, 12.0)
-}
-
-/// "⧉ Copy" text button with a drawn copy icon; `left_mid` is its left edge, vertically centred.
-pub fn copy_button(ui: &mut Ui, th: &Theme, left_mid: Pos2, label: &str, id: Id) -> Response {
-    let w = copy_button_width(ui, th, label);
-    let rect = Rect::from_min_size(pos2(left_mid.x, left_mid.y - 9.0), vec2(w, 18.0));
-    let resp = ui.interact(rect.expand(3.0), id, Sense::click()).on_hover_text("Copy comment");
-    let c = if resp.hovered() { th.accent_dark } else { th.accent };
+/// Icon-only copy button: two overlapping sheets, or a tick for a moment after
+/// copying (`copied`). `left_mid` is its left edge, vertically centred.
+pub fn copy_button(ui: &mut Ui, th: &Theme, left_mid: Pos2, copied: bool, id: Id) -> Response {
+    let rect = Rect::from_min_size(pos2(left_mid.x, left_mid.y - COPY_BUTTON_W / 2.0), vec2(COPY_BUTTON_W, COPY_BUTTON_W));
+    let resp = ui.interact(rect.expand(2.0), id, Sense::click()).on_hover_text(if copied { "Copied" } else { "Copy comment" });
+    let c = if copied {
+        th.ok
+    } else if resp.hovered() {
+        th.accent_dark
+    } else {
+        th.accent
+    };
+    let p = ui.painter();
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        fill(p, rect, 5.0, rgba(c, 0.12));
     }
-    let p = ui.painter();
-    // two overlapping sheets
-    let back = Rect::from_min_size(pos2(rect.left() + 3.5, rect.center().y - 6.5), vec2(8.5, 10.0));
-    let front = Rect::from_min_size(pos2(rect.left() + 0.5, rect.center().y - 3.5), vec2(8.5, 10.0));
-    p.rect_stroke(back, cr(2.0), Stroke::new(1.3_f32, c), StrokeKind::Middle);
-    p.rect_filled(front, cr(2.0), th.surface);
-    p.rect_stroke(front, cr(2.0), Stroke::new(1.3_f32, c), StrokeKind::Middle);
-    text(ui, th, pos2(rect.left() + COPY_ICON_W + 5.0, rect.center().y), Align2::LEFT_CENTER, label, Role::SansB, 12.0, c);
+    let m = rect.center();
+    if copied {
+        p.add(Shape::line(vec![pos2(m.x - 5.0, m.y + 0.5), pos2(m.x - 1.5, m.y + 4.0), pos2(m.x + 5.5, m.y - 4.0)], Stroke::new(1.8_f32, c)));
+    } else {
+        // two overlapping sheets
+        let back = Rect::from_min_size(pos2(m.x - 2.75, m.y - 6.5), vec2(8.5, 10.0));
+        let front = Rect::from_min_size(pos2(m.x - 5.75, m.y - 3.5), vec2(8.5, 10.0));
+        p.rect_stroke(back, cr(2.0), Stroke::new(1.3_f32, c), StrokeKind::Middle);
+        p.rect_filled(front, cr(2.0), th.surface);
+        p.rect_stroke(front, cr(2.0), Stroke::new(1.3_f32, c), StrokeKind::Middle);
+    }
     resp
+}
+
+/// How far to move a one-line galley down so its glyphs (tallest ink top to
+/// baseline) sit centred in its box. Fonts with tall ascent / descent metrics
+/// (Consolas) otherwise look pushed to the top of a pill.
+pub fn cap_center_offset(g: &egui::Galley) -> f32 {
+    let Some(row) = g.rows.first() else { return 0.0 };
+    let mut top = f32::INFINITY;
+    let mut base: Option<f32> = None;
+    for gl in row.glyphs.iter().filter(|gl| !gl.chr.is_whitespace()) {
+        top = top.min(gl.pos.y + gl.uv_rect.offset.y);
+        base = Some(base.map_or(gl.pos.y, |b: f32| b.max(gl.pos.y)));
+    }
+    match base {
+        Some(b) if top.is_finite() => (g.size().y / 2.0 - (top + b) / 2.0).round(),
+        _ => 0.0,
+    }
 }
 
 pub const CHIP_H: f32 = 30.0;

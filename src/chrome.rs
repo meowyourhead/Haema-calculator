@@ -50,16 +50,15 @@ fn tab_widths(ui: &Ui, th: &Theme) -> Vec<f32> {
         .collect()
 }
 
-fn theme_btn_w(ui: &Ui, th: &Theme) -> f32 {
-    text_width(ui, th, "Theme", Role::SansB, 12.5).ceil() + 52.0
-}
+/// The settings (gear) button, as wide as a window button.
+const SETTINGS_W: f32 = BTN_W;
 
 /// Narrowest window that still fits the tabs, the Theme button and the
 /// window buttons without overlap.
 pub fn min_width(ui: &Ui, th: &Theme) -> f32 {
     let tabs = tab_widths(ui, th).iter().sum::<f32>() + TAB_GAP * (TABS.len() - 1) as f32;
     // Tabs slide left of centre when space is short, so this is the tightest fit.
-    12.0 + tabs + 12.0 + CLOSE_W + BTN_W * 2.0 + theme_btn_w(ui, th) + 8.0
+    12.0 + tabs + 12.0 + CLOSE_W + BTN_W * 2.0 + SETTINGS_W
 }
 
 fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
@@ -70,8 +69,7 @@ fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
     // --- tabs (centred, with generous hit targets) -----------------------
     let widths = tab_widths(ui, th);
     let total_w = widths.iter().sum::<f32>() + TAB_GAP * (TABS.len() - 1) as f32;
-    let theme_w = theme_btn_w(ui, th);
-    let controls_left = rect.right() - (CLOSE_W + BTN_W * 2.0 + theme_w + 8.0);
+    let controls_left = rect.right() - (CLOSE_W + BTN_W * 2.0 + SETTINGS_W);
     let min_x = rect.left() + 12.0;
     let max_x = (controls_left - total_w - 12.0).max(min_x);
     let mut x = (rect.center().x - total_w / 2.0).clamp(min_x, max_x);
@@ -118,16 +116,16 @@ fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
-    // --- theme menu button (opens the palette / dark-mode popover) -------
-    let theme_btn = Rect::from_min_max(pos2(minimize.left() - 8.0 - theme_w, btn_top + 6.0), pos2(minimize.left() - 8.0, btn_top + CHROME_H - 6.0));
-    if theme_button(ui, th, theme_btn, app.menu_open).clicked() {
+    // --- settings (gear): the theme / scale / Excel / updates popover ----
+    let theme_btn = Rect::from_min_max(pos2(minimize.left() - SETTINGS_W, btn_top), pos2(minimize.left(), btn_top + CHROME_H));
+    if settings_button(ui, th, theme_btn, app.menu_open).clicked() {
         app.menu_open = !app.menu_open;
     }
     app.menu_btn = theme_btn;
 
     // --- "Update available" (only once the silent check found a newer release)
     let mut drag_right = theme_btn.left();
-    if let crate::update::Status::Available { tag, url } = app.update.status() {
+    if let crate::update::Status::Available { tag, .. } = app.update.status() {
         let label = "Update available";
         let uw = text_width(ui, th, label, Role::SansB, 12.0).ceil() + 30.0;
         let ur = Rect::from_min_max(pos2(theme_btn.left() - 8.0 - uw, theme_btn.top() + 3.0), pos2(theme_btn.left() - 8.0, theme_btn.bottom() - 3.0));
@@ -147,9 +145,10 @@ fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            let resp = resp.on_hover_text(format!("Version {} is out. Click to open its download page.", crate::update::display(&tag)));
+            let resp = resp.on_hover_text(format!("Version {} is out. Click to update (you are asked first).", crate::update::display(&tag)));
             if resp.clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                app.menu_open = false;
+                app.update_prompt = true;
             }
             drag_right = ur.left();
         }
@@ -383,55 +382,43 @@ fn caption(ui: &mut Ui, th: &Theme, rect: Rect, id: &'static str, kind: Caption)
     resp.on_hover_text(tip)
 }
 
-/// "◇ Theme ▾": the current palette's swatch, a label and a caret. Settings
-/// live here rather than in a permanent rail beside the results.
-fn theme_button(ui: &mut Ui, th: &Theme, rect: Rect, open: bool) -> Response {
-    let resp = ui.interact(rect, Id::new("chrome-theme"), Sense::click());
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
+/// Settings: a plain gear icon styled like the window buttons beside it.
+fn settings_button(ui: &mut Ui, th: &Theme, rect: Rect, open: bool) -> Response {
+    let resp = ui.interact(rect, Id::new("chrome-settings"), Sense::click());
+    let hovered = resp.hovered();
+    let pressed = resp.is_pointer_button_down_on();
     let p = ui.painter();
-    let fg = if th.palette == Palette::Genshin { hex(0xece5d8) } else { th.text };
-    let r = match th.palette {
-        Palette::Pokemon => 14.0,
-        Palette::Cyberpunk => 0.0,
-        Palette::Genshin => pill(),
-        Palette::Default => 8.0,
-    };
-    if open || resp.hovered() {
-        let a = if open { 1.6 } else { 1.0 };
+    if hovered || pressed || open {
+        let strong = pressed || open;
         let c = match th.palette {
-            Palette::Genshin => rgba(hex(0xcbba8c), 0.16 * a),
-            Palette::Cyberpunk => rgba(th.accent, 0.12 * a),
-            _ => rgba(th.text, 0.075 * a),
+            Palette::Genshin => rgba(hex(0xcbba8c), if strong { 0.28 } else { 0.16 }),
+            Palette::Pokemon => rgba(th.text, if strong { 0.16 } else { 0.08 }),
+            Palette::Cyberpunk => rgba(th.ring, if strong { 0.26 } else { 0.12 }),
+            Palette::Default => rgba(th.text, if strong { 0.14 } else { 0.075 }),
         };
-        fill(p, rect, r, c);
+        p.rect_filled(rect, 0.0, c);
     }
-    let border = match th.palette {
-        Palette::Genshin => rgba(hex(0xd3bc8e), 0.55),
-        Palette::Pokemon => rgba(th.ring, 0.55),
-        Palette::Cyberpunk => rgba(th.accent, 0.60),
-        Palette::Default => th.line_strong,
-    };
-    stroke_in(p, rect, r, 1.0, border);
-    let sc = pos2(rect.left() + 16.0, rect.center().y);
-    match th.palette {
-        Palette::Default => {
-            p.circle_filled(sc, 5.5, th.line_strong);
-            p.circle_filled(sc, 4.5, th.surface);
-            p.circle_filled(sc, 2.8, th.accent);
+    let fg = if th.palette == Palette::Genshin { hex(0xece5d8) } else { th.text };
+    gear(p, rect.center(), fg);
+    resp.on_hover_text("Settings: theme, display scale, Excel file and updates")
+}
+
+/// An eight-toothed gear outline centred on `c`.
+fn gear(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    use std::f32::consts::TAU;
+    let (outer, inner, teeth) = (7.5_f32, 5.6_f32, 8);
+    let mut pts = Vec::with_capacity(teeth * 4);
+    for i in 0..teeth {
+        let a = i as f32 / teeth as f32 * TAU;
+        let step = TAU / teeth as f32;
+        // tooth top spans ~40% of the pitch, flanks slope down to the root
+        for (da, r) in [(-0.20, outer), (0.20, outer), (0.30, inner), (0.70, inner)] {
+            let t = a + da * step;
+            pts.push(c + vec2(t.cos(), t.sin()) * r);
         }
-        Palette::Genshin => diamond(p, sc, 5.0, hex(0xd3bc8e), Stroke::NONE),
-        Palette::Pokemon => pokeball(p, sc, 11.0, th.ink, th.accent, Color32::WHITE),
-        Palette::Cyberpunk => cyber_chip(p, sc, 10.0, th.accent, th.accent, th.on_accent),
     }
-    text(ui, th, pos2(rect.left() + 28.0, rect.center().y), Align2::LEFT_CENTER, "Theme", Role::SansB, 12.5, fg);
-    // caret, flipped while open
-    let cx = rect.right() - 13.0;
-    let cy = rect.center().y;
-    let d = if open { -2.0 } else { 2.0 };
-    p.add(egui::Shape::line(vec![pos2(cx - 3.5, cy - d), pos2(cx, cy + d), pos2(cx + 3.5, cy - d)], Stroke::new(1.4_f32, fg)));
-    resp.on_hover_text("Colour theme, dark mode, display scale and updates")
+    p.add(egui::Shape::closed_line(pts, Stroke::new(1.3_f32, color)));
+    p.circle_stroke(c, 2.4, Stroke::new(1.3_f32, color));
 }
 
 // ---------------------------------------------------------------------------

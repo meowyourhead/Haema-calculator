@@ -1,6 +1,6 @@
-[package]
+﻿[package]
 name = "haematology_calculator"
-version = "2026.11.26"
+version = "2026.11.27"
 edition = "2021"
 
 [dependencies]

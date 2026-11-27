@@ -90,8 +90,18 @@ pub struct App {
     seen_zoom: f32,
     /// Background check for a newer GitHub release.
     pub update: crate::update::Checker,
+    /// "Update now?" confirmation shown (nothing happens until the user agrees).
+    pub update_prompt: bool,
     /// Ctrl+Tab (+1) / Ctrl+Shift+Tab (−1) presses taken out of this frame's input.
     tab_steps: i32,
+    /// The HBEL comments spreadsheet ("Open Excel"; remembered across launches).
+    pub excel_path: Option<std::path::PathBuf>,
+    pub excel_picker: crate::excel::Picker,
+    /// Problem opening the spreadsheet, shown in the source sheet panel.
+    pub excel_msg: Option<String>,
+    /// Tab shown last frame (re-read the shared HBEL folder on entering HBEL).
+    seen_tab: Tab,
+    seen_tab_set: bool,
     /// Last window size requested by `fit_window`.
     fit_req: Option<egui::Vec2>,
     /// The page fits the window `fit_window` last asked for (no scrollbar needed).
@@ -123,10 +133,11 @@ pub struct Shot {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::fonts::install(&cc.egui_ctx);
-        let Settings { dark, palette, mascots, cyberpunk_unlocked, scale } = Settings::load();
+        let Settings { dark, palette, mascots, cyberpunk_unlocked, scale, excel } = Settings::load();
         #[allow(unused_mut)]
         let mut app = App::blank(palette, dark, mascots, cyberpunk_unlocked, genshin_backdrop_texture(&cc.egui_ctx), pokemon_backdrop_texture(&cc.egui_ctx));
         app.scale = scale;
+        app.excel_path = excel;
         app.seen_zoom = cc.egui_ctx.zoom_factor();
         cc.egui_ctx.set_zoom_factor(scale);
         #[cfg(feature = "screenshot")]
@@ -161,7 +172,12 @@ impl App {
             dil: Default::default(),
             menu_open: false,
             menu_btn: Rect::NOTHING,
-            hbel: Default::default(),
+            // the source sheet opens beside the results by default
+            hbel: {
+                let mut h = crate::hbel_panel::HbelState::default();
+                h.source_open = true;
+                h
+            },
             genshin_backdrop,
             pokemon_backdrop,
             styled: None,
@@ -173,7 +189,13 @@ impl App {
             scale: 1.0,
             seen_zoom: 1.0,
             update: Default::default(),
+            update_prompt: false,
             tab_steps: 0,
+            excel_path: None,
+            excel_picker: Default::default(),
+            excel_msg: None,
+            seen_tab: Tab::Fbc,
+            seen_tab_set: false,
             fit_req: None,
             page_fits: true,
             base: None,
@@ -205,8 +227,12 @@ impl App {
         let th = tmp.theme();
         let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(4000.0, 4000.0))), ..Default::default() };
         let mut size = vec2(0.0, 0.0);
-        for (pass, tab) in [Tab::Retic, Tab::Retic, Tab::Fbc, Tab::PtAptt].into_iter().enumerate() {
+        // The last pass is Retic with its reference table unfolded: the
+        // default height shows all of it. It does not set the width.
+        let passes = [(Tab::Retic, false), (Tab::Retic, false), (Tab::Fbc, false), (Tab::PtAptt, false), (Tab::Retic, true)];
+        for (pass, (tab, ref_open)) in passes.into_iter().enumerate() {
             tmp.tab = tab;
+            tmp.ref_open = ref_open;
             let _ = ctx.run(raw.clone(), |ctx| {
                 tmp.apply_style(ctx, &th);
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
@@ -219,7 +245,8 @@ impl App {
                         Tab::Hbel => tmp.hbel_panel(ui, &th, o, w),
                     };
                     if pass > 0 {
-                        size = size.max(vec2(w + 2.0 * PAGE_MARGIN, crate::chrome::CHROME_H + bottom + 2.0 * PAGE_MARGIN));
+                        let page_w = if ref_open { 0.0 } else { w + 2.0 * PAGE_MARGIN };
+                        size = size.max(vec2(page_w, crate::chrome::CHROME_H + bottom + 2.0 * PAGE_MARGIN));
                     }
                 });
             });
@@ -327,6 +354,43 @@ impl App {
         }
     }
 
+    /// "Open Excel": open the chosen spreadsheet, or ask for it first (also
+    /// when the remembered file has moved).
+    pub fn open_excel(&mut self, ctx: &egui::Context) {
+        self.excel_msg = None;
+        match self.excel_path.clone() {
+            Some(p) if p.is_file() => {
+                if let Err(e) = crate::excel::open(&p) {
+                    self.excel_msg = Some(e);
+                }
+            }
+            Some(p) => {
+                self.excel_msg = Some(format!("The Excel file is no longer at {}. Choose where it is now.", p.display()));
+                self.excel_picker.start(ctx, Some(&p), true);
+            }
+            None => self.excel_picker.start(ctx, None, true),
+        }
+    }
+
+    /// Choose (or change) the spreadsheet without opening it.
+    pub fn choose_excel(&mut self, ctx: &egui::Context) {
+        self.excel_msg = None;
+        self.excel_picker.start(ctx, self.excel_path.as_deref(), false);
+    }
+
+    /// Take the file dialog's answer once it closes.
+    fn poll_excel(&mut self) {
+        let Some(picked) = self.excel_picker.poll() else { return };
+        let Some(path) = picked else { return };
+        self.excel_path = Some(path.clone());
+        self.save();
+        if self.excel_picker.open_after {
+            self.excel_msg = crate::excel::open(&path).err();
+        } else {
+            self.excel_msg = None;
+        }
+    }
+
     /// Ctrl+Tab / Ctrl+Shift+Tab: next / previous tab, wrapping at the ends.
     fn cycle_tab(&mut self, ctx: &egui::Context, steps: i32) {
         let order = crate::chrome::TABS;
@@ -370,7 +434,7 @@ impl App {
     }
 
     fn save(&self) {
-        Settings { dark: self.dark, palette: self.palette, mascots: self.mascots, cyberpunk_unlocked: self.cyberpunk_unlocked, scale: self.scale }.save();
+        Settings { dark: self.dark, palette: self.palette, mascots: self.mascots, cyberpunk_unlocked: self.cyberpunk_unlocked, scale: self.scale, excel: self.excel_path.clone() }.save();
     }
 
     /// Page width inside the default window (before the margin), once measured.
@@ -410,7 +474,8 @@ impl App {
             Tab::Hbel => false,
         };
         // a roomier window than the tightest fit, with more background around the page
-        let (mut w, mut h) = ((base.x * WINDOW_GROW).ceil(), (base.y * WINDOW_GROW).ceil());
+        // Height: Retic with its reference unfolded (measured in `default_window`).
+        let (mut w, mut h) = ((base.x * WINDOW_GROW).ceil(), base.y.ceil());
         let need_h = crate::chrome::CHROME_H + content_h + 2.0 * PAGE_MARGIN;
         if expanded {
             w = w.max(content_w + 2.0 * PAGE_MARGIN);
@@ -462,7 +527,7 @@ pub const PAGE_MARGIN: f32 = 24.0;
 const MIN_SIDE: f32 = 8.0;
 /// Room left at the bottom of the screen for the taskbar.
 const TASKBAR_ALLOWANCE: f32 = 56.0;
-/// The default window is this much larger than the tightest fit of every page.
+/// The default window is this much wider than the tightest fit of every page.
 const WINDOW_GROW: f32 = 1.3;
 
 /// Display scale steps offered in the Theme menu (Ctrl+Plus / Minus also work).
@@ -502,6 +567,7 @@ struct Settings {
     mascots: bool,
     cyberpunk_unlocked: bool,
     scale: f32,
+    excel: Option<std::path::PathBuf>,
 }
 
 fn settings_path() -> Option<std::path::PathBuf> {
@@ -520,7 +586,7 @@ impl Settings {
     }
 
     fn parse(text: &str) -> Settings {
-        let mut s = Settings { dark: false, palette: Palette::Default, mascots: true, cyberpunk_unlocked: false, scale: 1.0 };
+        let mut s = Settings { dark: false, palette: Palette::Default, mascots: true, cyberpunk_unlocked: false, scale: 1.0, excel: None };
         for line in text.lines() {
             if let Some(v) = line.strip_prefix("theme=") {
                 s.dark = v.trim() == "dark";
@@ -530,6 +596,9 @@ impl Settings {
                 s.mascots = v.trim() != "hidden";
             } else if let Some(v) = line.strip_prefix("cyberpunk=") {
                 s.cyberpunk_unlocked = v.trim() == "unlocked";
+            } else if let Some(v) = line.strip_prefix("hbel_excel=") {
+                let v = v.trim();
+                s.excel = (!v.is_empty()).then(|| std::path::PathBuf::from(v));
             } else if let Some(v) = line.strip_prefix("scale=") {
                 if let Ok(x) = v.trim().parse::<f32>() {
                     if x.is_finite() {
@@ -553,12 +622,14 @@ impl Settings {
             let _ = std::fs::write(
                 path,
                 format!(
-                    "theme={}\npalette={}\nmascots={}\ncyberpunk={}\nscale={:.2}\n",
+                    "theme={}\npalette={}\nmascots={}\ncyberpunk={}\nscale={:.2}\nhbel_excel={}\n",
                     if self.dark { "dark" } else { "light" },
                     self.palette.key(),
                     if self.mascots { "shown" } else { "hidden" },
                     if self.cyberpunk_unlocked { "unlocked" } else { "locked" },
-                    self.scale
+                    self.scale,
+                    // one line: a path never holds a newline on Windows
+                    self.excel.as_ref().map(|p| p.display().to_string().replace(['\r', '\n'], "")).unwrap_or_default()
                 ),
             );
         }
@@ -589,10 +660,18 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         crate::cursor::install(frame);
         self.sync_zoom(ctx);
+        self.poll_excel();
         let steps = std::mem::take(&mut self.tab_steps);
         if steps != 0 {
             self.cycle_tab(ctx, steps);
         }
+        // Coming back to HBEL re-reads the shared folder (comments added on
+        // other PCs), in place of the old Reload button.
+        if self.tab == Tab::Hbel && self.seen_tab != Tab::Hbel && self.seen_tab_set {
+            self.hbel.reload();
+        }
+        self.seen_tab = self.tab;
+        self.seen_tab_set = true;
 
         // Ctrl+H hides / shows the theme mascots. Consumed here so a focused
         // text field never sees it.
@@ -612,29 +691,18 @@ impl eframe::App for App {
         crate::chrome::title_bar(self, ctx);
 
         let mut fit: Option<(f32, f32)> = None;
-        if self.tab == Tab::Hbel && self.hbel.source_open {
-            let screen_w = ctx.screen_rect().width();
-            egui::SidePanel::right("hbel-source-panel")
-                .resizable(true)
-                // half the window by default (the user can drag the edge)
-                .default_width((screen_w * 0.5).max(420.0))
-                .min_width(380.0)
-                .max_width((screen_w - 360.0).max(400.0))
-                .frame(egui::Frame::NONE.fill(th.bg).stroke(Stroke::new(1.0_f32, th.line_strong)))
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().id_salt("hbel-source-scroll").auto_shrink([false, false]).drag_to_scroll(false).show(ui, |ui| {
-                        let o = ui.cursor().min + vec2(14.0, 24.0);
-                        let w = ui.available_width() - 28.0;
-                        let bottom = self.hbel_source(ui, &th, o, w);
-                        let top = ui.cursor().min;
-                        ui.allocate_rect(Rect::from_min_max(top, pos2(o.x + w, bottom + 40.0)), Sense::hover());
-                    });
-                });
-        }
-
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(th.bg)).show(ctx, |ui| {
             let screen = ui.max_rect();
             paint_page_background(ui, &th, screen, &self.genshin_backdrop, &self.pokemon_backdrop);
+
+            // HBEL: two columns on one continuous page background (no side
+            // panel, so nothing interrupts the tab where it opens into the page).
+            if self.tab == Tab::Hbel {
+                let h = self.hbel_page(ui, &th, screen, focus_before);
+                fit = Some((0.0, h));
+                crate::pikachu::perch(ui, Id::new("pika-floor"), screen, crate::pikachu::PerchKind::Floor, false);
+                return;
+            }
 
             // The page is laid out at its natural width and the window is
             // sized around it (see `fit_window`), leaving the same band of
@@ -682,6 +750,9 @@ impl eframe::App for App {
 
         if self.menu_open {
             self.theme_menu(ctx);
+        }
+        if self.update_prompt {
+            self.update_dialog(ctx);
         }
 
         // Theme mascots: roam the perches registered above.
@@ -795,7 +866,7 @@ fn paint_page_background(
 /// Tab / Enter move to the next field, Shift+Tab / Shift+Enter to the previous one.
 /// Fields are walked in the order they were drawn (which matches reading order) and wrap
 /// at the ends. Works whether or not a field currently has focus.
-fn nav_fields(ui: &Ui, focus_before: Option<Id>) {
+pub(crate) fn nav_fields(ui: &Ui, focus_before: Option<Id>) {
     let back = ui.input(|i| {
         i.events.iter().find_map(|e| match e {
             egui::Event::Key { key, pressed: true, modifiers, .. }
@@ -837,11 +908,161 @@ const MENU_W: f32 = 184.0;
 const MENU_ROW: f32 = 28.0;
 const MENU_GAP: f32 = 4.0;
 const MENU_SPLIT: f32 = 9.0;
+/// Height of the palette swatches.
+const SWATCH_H: f32 = 30.0;
+const SWATCH_GAP: f32 = 8.0;
 
-fn menu_content_h(rows: usize) -> f32 {
-    // dark-mode row, a divider, one row per listed palette, a divider, then
-    // the display scale and update rows
-    MENU_ROW + MENU_SPLIT + rows as f32 * (MENU_GAP + MENU_ROW) + MENU_SPLIT + MENU_ROW + MENU_GAP + MENU_ROW
+fn menu_content_h() -> f32 {
+    // "Theme" row with the light / dark switch, the swatch grid, a divider,
+    // then the mascots, display scale, Excel file and update rows
+    MENU_ROW + 6.0 + SWATCH_H + 2.0 * MENU_SPLIT + 4.0 * MENU_ROW + 3.0 * MENU_GAP
+}
+
+/// What a palette's swatch shows: the dark mode it opens in.
+fn swatch_dark(p: Palette, dark: bool) -> bool {
+    match p {
+        Palette::Genshin | Palette::Cyberpunk => true,
+        Palette::Pokemon => false,
+        Palette::Default => dark,
+    }
+}
+
+/// Corner radius / chamfer of a palette's swatch tile.
+fn swatch_radius(p: Palette) -> f32 {
+    match p {
+        Palette::Default => 6.0,
+        Palette::Genshin => 3.0,
+        Palette::Pokemon => 11.0,
+        Palette::Cyberpunk => 7.0,
+    }
+}
+
+/// Outline following a swatch tile's shape (selection / hover ring).
+fn swatch_outline(p: &egui::Painter, pal: Palette, r: Rect, w: f32, c: Color32) {
+    if pal == Palette::Cyberpunk {
+        cyber_stroke(p, r, swatch_radius(pal), w, c);
+    } else {
+        p.rect_stroke(r, swatch_radius(pal), Stroke::new(w, c), egui::StrokeKind::Inside);
+    }
+}
+
+/// A palette's swatch: a tiny scene in that theme's own materials.
+fn swatch(p: &egui::Painter, pal: Palette, pt: &Theme, r: Rect) {
+    let rad = swatch_radius(pal);
+    let (w, h) = (r.width(), r.height());
+    let c = r.center();
+    match pal {
+        // a lab sheet: paper card on the page, clay tab, two lines of text
+        Palette::Default => {
+            fill(p, r, rad, pt.bg);
+            stroke_in(p, r, rad, 1.0, pt.line_strong);
+            let card = Rect::from_min_max(pos2(r.left() + w * 0.18, r.top() + 6.0), pos2(r.right() - w * 0.18, r.bottom() + 0.0));
+            p.rect_filled(card, egui::CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, pt.surface);
+            p.rect_stroke(card, egui::CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, Stroke::new(1.0_f32, pt.line_strong), egui::StrokeKind::Inside);
+            let x0 = card.left() + 4.0;
+            fill(p, Rect::from_min_size(pos2(x0, card.top() + 4.0), vec2((card.width() * 0.42).max(8.0), 4.0)), 2.0, pt.accent);
+            let line = Stroke::new(1.3_f32, rgba(pt.text, 0.45));
+            p.line_segment([pos2(x0, card.top() + 12.0), pos2(card.right() - 4.0, card.top() + 12.0)], line);
+            p.line_segment([pos2(x0, card.top() + 16.5), pos2(x0 + (card.width() - 8.0) * 0.62, card.top() + 16.5)], line);
+        }
+        // a midnight slate tablet: champagne corner brackets around a gold sparkle
+        Palette::Genshin => {
+            let gold = hex(0xd3bc8e);
+            fill(p, r, rad, hex(0x1d2230));
+            radial(p, c, w * 0.55, h * 0.6, rgba(gold, 0.28));
+            let b = r.shrink(3.0);
+            let st = Stroke::new(1.2_f32, gold);
+            let l = 4.5;
+            for (corner, dx, dy) in [(b.left_top(), 1.0, 1.0), (b.right_top(), -1.0, 1.0), (b.left_bottom(), 1.0, -1.0), (b.right_bottom(), -1.0, -1.0)] {
+                p.line_segment([corner, corner + vec2(l * dx, 0.0)], st);
+                p.line_segment([corner, corner + vec2(0.0, l * dy)], st);
+            }
+            let mut m = egui::epaint::Mesh::default();
+            m.colored_vertex(c, gold);
+            for i in 0..=8 {
+                let a = i as f32 * std::f32::consts::FRAC_PI_4 - std::f32::consts::FRAC_PI_2;
+                // long vertical points, shorter side points, a narrow waist
+                let rr = match i % 4 {
+                    0 => h * 0.36,
+                    2 => h * 0.24,
+                    _ => h * 0.09,
+                };
+                m.colored_vertex(c + vec2(a.cos(), a.sin()) * rr, gold);
+            }
+            for i in 0..8u32 {
+                m.add_triangle(0, i + 1, i + 2);
+            }
+            p.add(egui::Shape::mesh(m));
+            p.circle_filled(c, 1.1, hex(0xece5d8));
+        }
+        // a sunny meadow inside the thick milky rim, with a lightning bolt
+        Palette::Pokemon => {
+            // the milky rim is the tile itself; the meadow sits inside it, so
+            // nothing can spill past the rounded edge
+            fill(p, r, rad, Color32::from_white_alpha(240));
+            let inner = r.shrink(2.5);
+            let ir = rad - 2.5;
+            fill(p, inner, ir, hex(0xbfe6f4));
+            let band = inner.top() + inner.height() * 0.62;
+            let hill = p.with_clip_rect(Rect::from_min_max(pos2(inner.left() + 1.0, inner.top()), pos2(inner.right() - 1.0, band + 0.5)));
+            hill.circle_filled(pos2(inner.left() + w * 0.28, band + h * 0.32), h * 0.5, hex(0x8fd16a));
+            hill.circle_filled(pos2(inner.right() - w * 0.12, band + h * 0.36), h * 0.42, hex(0x7cc35a));
+            p.rect_filled(Rect::from_min_max(pos2(inner.left(), band), inner.max), egui::CornerRadius { nw: 0, ne: 0, sw: ir as u8, se: ir as u8 }, hex(0x8fd16a));
+            // bolt: two blades plus the joint, outlined in ink
+            let k = h / 26.0;
+            let o = c + vec2(w * 0.12, -0.5);
+            let pt_ = |x: f32, y: f32| o + vec2(x, y) * k;
+            let pts = [pt_(1.0, -7.0), pt_(-3.5, 0.8), pt_(0.0, 0.8), pt_(-1.2, 7.0), pt_(3.5, -0.8), pt_(0.0, -0.8)];
+            let yellow = hex(0xf6cf3d);
+            let mut m = egui::epaint::Mesh::default();
+            for q in pts {
+                m.colored_vertex(q, yellow);
+            }
+            for t in [[0u32, 1, 2], [0, 2, 5], [5, 2, 3], [5, 3, 4]] {
+                m.add_triangle(t[0], t[1], t[2]);
+            }
+            p.add(egui::Shape::mesh(m));
+            p.add(egui::Shape::closed_line(pts.to_vec(), Stroke::new(1.0_f32, hex(0x2c3b4a))));
+            stroke_in(p, inner, ir, 1.0, rgba(hex(0x1b8580), 0.40));
+            stroke_in(p, r, rad, 1.0, rgba(hex(0x2c3b4a), 0.12));
+        }
+        // a black chamfered chip: red scanlines, an offset cyan / red glitch bar
+        Palette::Cyberpunk => {
+            let red = hex(0xff6158);
+            let cyan = hex(0x5ef6ff);
+            cyber_fill(p, r, rad, hex(0x0a090e));
+            let cut = rad.min(w * 0.30).min(h * 0.40);
+            let mut y = r.top() + 2.5;
+            while y < r.bottom() - 1.0 {
+                let x0 = r.left() + (cut - (r.bottom() - y)).max(0.0) + 1.0;
+                let x1 = r.right() - (cut - (y - r.top())).max(0.0) - 1.0;
+                p.line_segment([pos2(x0, y), pos2(x1, y)], Stroke::new(1.0_f32, rgba(red, 0.16)));
+                y += 3.0;
+            }
+            p.rect_filled(Rect::from_min_size(pos2(r.left() + w * 0.16, c.y - 3.0), vec2(w * 0.52, 3.0)), 0.0, cyan);
+            p.rect_filled(Rect::from_min_size(pos2(r.left() + w * 0.30, c.y + 2.0), vec2(w * 0.40, 2.0)), 0.0, red);
+            p.rect_filled(Rect::from_min_size(pos2(r.left() + w * 0.72, c.y - 3.0), vec2(w * 0.08, 3.0)), 0.0, rgba(cyan, 0.45));
+            cyber_stroke(p, r, rad, 1.0, rgba(red, 0.75));
+            p.line_segment([pos2(r.left() + 1.0, r.top() + 1.0), pos2(r.left() + w * 0.35, r.top() + 1.0)], Stroke::new(2.0_f32, red));
+        }
+    }
+}
+
+/// A small on / off switch (track `sw`, knob position `on` from 0 to 1).
+fn mini_switch(p: &egui::Painter, th: &Theme, sw: Rect, on: f32) {
+    let track = match th.palette {
+        Palette::Genshin => crate::theme::mix(on, hex(0xd3bc8e), hex(0x646d84)),
+        _ => crate::theme::mix(on, th.accent, th.line_strong),
+    };
+    let sr = sw.height() / 2.0;
+    fill(p, sw, sr, track);
+    if th.palette == Palette::Pokemon {
+        stroke_in(p, sw, sr, 1.0, rgba(th.ink, if th.dark { 0.35 } else { 0.18 }));
+    }
+    let kr = sr - 2.0;
+    let kx = sw.left() + sr + (sw.width() - 2.0 * sr) * on;
+    p.circle_filled(pos2(kx, sw.center().y + 1.0), kr, rgba(th.ink, 0.22));
+    p.circle_filled(pos2(kx, sw.center().y), kr, Color32::WHITE);
 }
 
 impl App {
@@ -860,7 +1081,7 @@ impl App {
         let th = self.theme();
         let panel_w = MENU_W + 20.0;
         let btn = self.menu_btn;
-        let panel = Rect::from_min_size(pos2(btn.right() - panel_w, crate::chrome::CHROME_H + 6.0), vec2(panel_w, menu_content_h(self.menu_palettes().len()) + 28.0));
+        let panel = Rect::from_min_size(pos2(btn.right() - panel_w, crate::chrome::CHROME_H + 6.0), vec2(panel_w, menu_content_h() + 28.0));
         let origin = panel.min + vec2(10.0, 14.0);
         egui::Area::new(Id::new("theme-menu"))
             .order(egui::Order::Foreground)
@@ -880,7 +1101,7 @@ impl App {
         let toggle_h = MENU_ROW;
         let gap = MENU_GAP;
         let palettes = self.menu_palettes();
-        let total_h = menu_content_h(palettes.len());
+        let total_h = menu_content_h();
         let sb = Rect::from_min_size(origin, vec2(w + 20.0, total_h));
         let p = ui.painter().clone();
 
@@ -926,106 +1147,91 @@ impl App {
 
         let mut y = origin.y;
 
-        // --- dark mode switch
-        let rect = Rect::from_min_size(pos2(origin.x, y), vec2(w, toggle_h));
-        let resp = side_toggle(ui, th, rect, Id::new("dark-toggle"), false);
-        let icon_c = pos2(rect.left() + 10.0, rect.center().y);
         let fgc = if th.palette == Palette::Genshin { hex(0xece5d8) } else { th.text };
-        if th.dark {
-            moon_icon(&p, icon_c, fgc);
-        } else {
-            sun_icon(&p, icon_c, fgc);
+        let accent = if th.palette == Palette::Genshin { hex(0xd3bc8e) } else { th.accent };
+
+        // --- "Theme · <name>" and a compact sun / moon switch
+        let row = Rect::from_min_size(pos2(origin.x, y), vec2(w, toggle_h));
+        let tr = text(ui, th, pos2(row.left() + 2.0, row.center().y), Align2::LEFT_CENTER, "Theme", Role::SansB, 13.0, fgc);
+        let cur = palettes.iter().find(|(pl, _)| *pl == self.palette).map_or("", |(_, n)| *n);
+        text(ui, th, pos2(tr.right() + 6.0, row.center().y), Align2::LEFT_CENTER, cur, Role::Sans, 12.5, rgba(fgc, 0.62));
+        let sw = Rect::from_min_size(pos2(row.right() - 46.0, row.center().y - 11.0), vec2(46.0, 22.0));
+        let resp = ui.interact(sw.expand(3.0), Id::new("dark-toggle"), Sense::click()).on_hover_text(if th.dark { "Dark mode · click for light" } else { "Light mode · click for dark" });
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        text(ui, th, pos2(icon_c.x + 12.0, rect.center().y), Align2::LEFT_CENTER, "Dark mode", Role::Sans, 13.0, fgc);
-        // switch
-        let sw = Rect::from_min_size(pos2(rect.right() - 8.0 - 22.0, rect.center().y - 6.0), vec2(22.0, 12.0));
         let on = ui.ctx().animate_bool_with_time(Id::new("dark-anim"), th.dark, 0.2);
-        let track = match (th.palette, th.dark) {
-            (Palette::Genshin, true) => hex(0xd3bc8e),
-            (Palette::Genshin, false) => hex(0x646d84),
-            (_, true) => th.accent,
-            _ => th.line_strong,
-        };
-        let sr = 6.0;
-        fill(&p, sw, sr, track);
-        if th.palette == Palette::Pokemon {
-            stroke_in(&p, sw, sr, 1.0, rgba(th.ink, if th.dark { 0.35 } else { 0.18 }));
+        let tr_r = if th.palette == Palette::Cyberpunk { 3.0 } else { sw.height() / 2.0 };
+        fill(&p, sw, tr_r, rgba(fgc, if resp.hovered() { 0.14 } else { 0.08 }));
+        stroke_in(&p, sw, tr_r, 1.0, rgba(fgc, if resp.hovered() { 0.32 } else { 0.18 }));
+        let (sun_c, moon_c) = (pos2(sw.left() + 11.0, sw.center().y), pos2(sw.right() - 11.0, sw.center().y));
+        let knob = pos2(sun_c.x + (moon_c.x - sun_c.x) * on, sw.center().y);
+        let kr = sw.height() / 2.0 - 2.0;
+        if th.palette == Palette::Cyberpunk {
+            fill(&p, Rect::from_center_size(knob, vec2(2.0 * kr, 2.0 * kr)), 2.0, accent);
+        } else {
+            p.circle_filled(knob, kr, accent);
         }
-        let kx = sw.left() + 6.0 + 10.0 * on;
-        p.circle_filled(pos2(kx, sw.center().y + 1.0), 4.0, rgba(th.ink, 0.22));
-        p.circle_filled(pos2(kx, sw.center().y), 4.0, Color32::WHITE);
+        let on_knob = if th.palette == Palette::Genshin { hex(0x3b4255) } else { th.on_accent };
+        // icons scaled down to fit the knob
+        let small_sun = |c: egui::Pos2, col: Color32| {
+            p.circle_stroke(c, 2.4, Stroke::new(1.2_f32, col));
+            for i in 0..8 {
+                let a = i as f32 * std::f32::consts::FRAC_PI_4;
+                let d = vec2(a.sin(), -a.cos());
+                p.line_segment([c + d * 4.4, c + d * 5.8], Stroke::new(1.2_f32, col));
+            }
+        };
+        small_sun(sun_c, if on < 0.5 { on_knob } else { rgba(fgc, 0.55) });
+        crate::ui::crescent(&p, moon_c, 5.0, if on >= 0.5 { on_knob } else { rgba(fgc, 0.55) });
         if resp.clicked() {
             self.toggle_dark();
         }
-        y += toggle_h;
-        let div_c = if th.palette == Palette::Genshin { rgba(hex(0xd3bc8e), 0.35) } else { th.line };
-        p.line_segment([pos2(origin.x + 2.0, y + MENU_SPLIT / 2.0), pos2(origin.x + w - 2.0, y + MENU_SPLIT / 2.0)], Stroke::new(1.0_f32, div_c));
-        y += MENU_SPLIT - gap;
+        y += toggle_h + 6.0;
 
-        // --- palettes
-        for (i, (pal, name)) in palettes.iter().enumerate()
-        {
-            y += gap;
-            let rect = Rect::from_min_size(pos2(origin.x, y), vec2(w, toggle_h));
+        // --- palettes: a row of colour swatches (2 × 2 grid of each theme's colours)
+        let n = palettes.len().max(1) as f32;
+        let sw_w = ((w - SWATCH_GAP * (n - 1.0)) / n).floor();
+        for (i, (pal, name)) in palettes.iter().enumerate() {
+            let r = Rect::from_min_size(pos2(origin.x + i as f32 * (sw_w + SWATCH_GAP), y), vec2(sw_w, SWATCH_H));
             let active = self.palette == *pal;
-            let resp = side_toggle(ui, th, rect, Id::new(("palette", i)), active);
-            let sc = pos2(rect.left() + 10.0, rect.center().y);
-            let (fg, sw_fill, sw_border) = if th.palette == Palette::Genshin {
-                if active {
-                    (hex(0x3b4255), hex(0x3b4255), hex(0x3b4255))
-                } else {
-                    (rgba(hex(0xece5d8), 0.80), Color32::TRANSPARENT, hex(0xd3bc8e))
-                }
-            } else if th.palette == Palette::Pokemon {
-                if active {
-                    (th.text, th.ring, th.ring)
-                } else {
-                    (th.text, Color32::TRANSPARENT, th.line_strong)
-                }
-            } else if th.palette == Palette::Cyberpunk {
-                // the selected list row is a solid red bar with dark type
-                if active {
-                    (th.on_accent, th.on_accent, th.on_accent)
-                } else {
-                    (th.accent, Color32::TRANSPARENT, th.accent)
-                }
-            } else if active {
-                (th.accent_dark, th.accent, th.accent)
-            } else {
-                (th.text, Color32::TRANSPARENT, th.line_strong)
-            };
-            match pal {
-                Palette::Default => {
-                    p.circle_filled(sc, 5.0, sw_border);
-                    p.circle_filled(sc, 4.0, th.surface);
-                    p.circle_filled(sc, 2.5, if active { th.accent } else { th.secondary });
-                }
-                Palette::Genshin => {
-                    diamond(&p, sc, 4.5, if active { sw_fill } else { Color32::TRANSPARENT }, Stroke::new(1.0_f32, sw_border));
-                }
-                Palette::Pokemon => {
-                    pokeball(&p, sc, 8.0, th.ink, th.accent, Color32::WHITE);
-                }
-                Palette::Cyberpunk => {
-                    cyber_chip(
-                        &p,
-                        sc,
-                        9.0,
-                        sw_fill,
-                        sw_border,
-                        if active { th.accent } else { th.ring },
-                    );
-                }
+            let resp = ui.interact(r.expand(2.0), Id::new(("palette", i)), Sense::click()).on_hover_text(*name);
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            text(ui, th, pos2(sc.x + 12.0, rect.center().y), Align2::LEFT_CENTER, name, Role::Sans, 13.0, fg);
+            let pt = Theme::new(*pal, swatch_dark(*pal, self.dark));
+            let r = if resp.is_pointer_button_down_on() { r.shrink(1.0) } else { r };
+            swatch(&p, *pal, &pt, r);
+            if active {
+                swatch_outline(&p, *pal, r.expand(3.0), 2.0, accent);
+            } else if resp.hovered() {
+                swatch_outline(&p, *pal, r.expand(3.0), 1.0, rgba(fgc, 0.45));
+            }
             if resp.clicked() {
                 self.set_palette(*pal);
             }
-            y += toggle_h;
         }
-
+        y += SWATCH_H + MENU_SPLIT;
+        let div_c = if th.palette == Palette::Genshin { rgba(hex(0xd3bc8e), 0.35) } else { th.line };
+        p.line_segment([pos2(origin.x + 2.0, y), pos2(origin.x + w - 2.0, y)], Stroke::new(1.0_f32, div_c));
         y += MENU_SPLIT;
-        p.line_segment([pos2(origin.x + 2.0, y - MENU_SPLIT / 2.0), pos2(origin.x + w - 2.0, y - MENU_SPLIT / 2.0)], Stroke::new(1.0_f32, div_c));
+
+        // --- mascots (Pikachu in Pokémon, Paimon in Genshin)
+        let rect = Rect::from_min_size(pos2(origin.x, y), vec2(w, toggle_h));
+        let resp = side_toggle(ui, th, rect, Id::new("mascots-toggle"), false).on_hover_text("Pikachu (Pokémon theme) and Paimon (Genshin theme) · Ctrl+H");
+        let ic = pos2(rect.left() + 10.0, rect.center().y);
+        // a paw print
+        p.circle_filled(ic + vec2(0.0, 2.2), 2.7, fgc);
+        for d in [vec2(-3.4, -1.6), vec2(-1.2, -3.9), vec2(1.2, -3.9), vec2(3.4, -1.6)] {
+            p.circle_filled(ic + d, 1.15, fgc);
+        }
+        text(ui, th, pos2(ic.x + 12.0, rect.center().y), Align2::LEFT_CENTER, "Mascots", Role::Sans, 13.0, fgc);
+        let on = ui.ctx().animate_bool_with_time(Id::new("mascots-anim"), self.mascots, 0.2);
+        mini_switch(&p, th, Rect::from_min_size(pos2(rect.right() - 8.0 - 24.0, rect.center().y - 7.0), vec2(24.0, 14.0)), on);
+        if resp.clicked() {
+            self.toggle_mascots();
+        }
+        y += toggle_h + gap;
 
         // --- display scale: − 100% +
         let ctx = ui.ctx().clone();
@@ -1071,13 +1277,41 @@ impl App {
         text(ui, th, val.center(), Align2::CENTER_CENTER, &pct, Role::SansB, 12.5, fgc);
         y += toggle_h + gap;
 
+        // --- HBEL Excel file (what "Open Excel" opens)
+        let rect = Rect::from_min_size(pos2(origin.x, y), vec2(w, toggle_h));
+        let busy = self.excel_picker.busy();
+        let tip = match &self.excel_path {
+            Some(p) => format!("HBEL comments spreadsheet:\n{}\nClick to choose a different file", p.display()),
+            None => "Choose the HBEL comments spreadsheet that \u{201c}Open Excel\u{201d} opens".to_string(),
+        };
+        let resp = side_toggle(ui, th, rect, Id::new("excel-file"), false).on_hover_text(tip);
+        // a small sheet with a grid
+        let ic = pos2(rect.left() + 10.0, rect.center().y);
+        let sheet = Rect::from_center_size(ic, vec2(10.0, 12.0));
+        stroke_in(&p, sheet, 1.5, 1.2, fgc);
+        p.line_segment([pos2(sheet.left(), ic.y - 1.5), pos2(sheet.right(), ic.y - 1.5)], Stroke::new(1.0_f32, fgc));
+        p.line_segment([pos2(sheet.left(), ic.y + 2.0), pos2(sheet.right(), ic.y + 2.0)], Stroke::new(1.0_f32, fgc));
+        p.line_segment([pos2(ic.x - 1.0, sheet.top() + 3.0), pos2(ic.x - 1.0, sheet.bottom())], Stroke::new(1.0_f32, fgc));
+        text(ui, th, pos2(ic.x + 12.0, rect.center().y), Align2::LEFT_CENTER, "Excel", Role::Sans, 13.0, fgc);
+        let accent = if th.palette == Palette::Genshin { hex(0xd3bc8e) } else { th.accent };
+        let (msg, mc) = match (&self.excel_path, busy) {
+            (_, true) => ("Choosing…".to_string(), rgba(fgc, 0.65)),
+            (Some(p), _) => (crate::excel::short_name(p, 18), if p.is_file() { rgba(fgc, 0.85) } else { th.bad }),
+            (None, _) => ("Choose file…".to_string(), accent),
+        };
+        text(ui, th, pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, &msg, Role::SansB, 11.5, mc);
+        if resp.clicked() && !busy {
+            self.choose_excel(&ctx);
+        }
+        y += toggle_h + gap;
+
         // --- updates
         let rect = Rect::from_min_size(pos2(origin.x, y), vec2(w, toggle_h));
         let status = self.update.status();
         let this_s = format!("This version: {}", crate::update::date_label(crate::update::current()));
         let resp = side_toggle(ui, th, rect, Id::new("update-check"), false);
         let resp = match &status {
-            crate::update::Status::Available { url, .. } => resp.on_hover_text(format!("{}\nOpen the download page: {}", this_s, url)),
+            crate::update::Status::Available { .. } => resp.on_hover_text(format!("{}\nClick to update (you are asked first)", this_s)),
             _ => resp.on_hover_text(format!("{}\nClick to check GitHub for a newer release", this_s)),
         };
         let icon_c = pos2(rect.left() + 10.0, rect.center().y);
@@ -1100,10 +1334,85 @@ impl App {
         text(ui, th, pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, &msg, Role::SansB, 11.5, mc);
         if resp.clicked() {
             match status {
-                crate::update::Status::Available { url, .. } => ui.ctx().open_url(egui::OpenUrl::new_tab(url)),
+                crate::update::Status::Available { .. } => {
+                    self.menu_open = false;
+                    self.update_prompt = true;
+                }
                 crate::update::Status::Checking => {}
                 _ => self.update.start(&ctx),
             }
+        }
+    }
+
+    /// "Update now?": asks before anything is done about a newer release.
+    /// Only "Update" opens the release's download page; "Not now", Esc or a
+    /// click outside close it.
+    fn update_dialog(&mut self, ctx: &egui::Context) {
+        let crate::update::Status::Available { tag, url } = self.update.status() else {
+            self.update_prompt = false;
+            return;
+        };
+        let th = self.theme();
+        let screen = ctx.screen_rect();
+        let w = 400.0_f32.min(screen.width() - 32.0);
+        let pad = 22.0;
+        let mut act: Option<bool> = None;
+        egui::Area::new(Id::new("update-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+            // dim the page; a click on it is "Not now"
+            let dim = ui.allocate_rect(screen, Sense::click());
+            let p = ui.painter().clone();
+            p.rect_filled(screen, 0.0, Color32::from_black_alpha(if th.dark { 130 } else { 90 }));
+            let fg = th.text;
+            let new_s = crate::update::display(&tag);
+            let cur_s = crate::update::date_label(crate::update::current());
+            let body = format!("Version {} is available (you have {}).", new_s, cur_s);
+            let more = "Update now? The download page for the new version opens in your browser. Nothing changes in this app until you install it.";
+            let iw = w - 2.0 * pad;
+            let h = pad + 26.0 + 12.0
+                + paragraph_height(ui, &th, iw, &body, Role::Sans, 14.0, 1.45)
+                + 8.0
+                + paragraph_height(ui, &th, iw, more, Role::Sans, 13.0, 1.45)
+                + 20.0 + 36.0 + pad;
+            let r = Rect::from_center_size(screen.center(), vec2(w, h));
+            // the panel itself swallows clicks so they do not reach the dim layer
+            let _ = ui.interact(r, Id::new("update-dialog-panel"), Sense::click());
+            match th.palette {
+                Palette::Cyberpunk => cyber_panel(&p, r, 9.0, th.surface, 1.0, rgba(th.accent, 0.6)),
+                _ => {
+                    p.add(card_shadow(&p, &th, r, th.radius_lg));
+                    fill(&p, r, th.radius_lg, th.surface);
+                    stroke_in(&p, r, th.radius_lg, 1.0, th.line_strong);
+                }
+            }
+            let x = r.left() + pad;
+            let mut y = r.top() + pad;
+            text_ls(ui, &th, pos2(x, y + 13.0), Align2::LEFT_CENTER, "Update available", Role::Display, 19.0, fg, -0.01);
+            y += 26.0 + 12.0;
+            y = paragraph(ui, &th, pos2(x, y), iw, &body, Role::Sans, 14.0, fg, 1.45).bottom() + 8.0;
+            y = paragraph(ui, &th, pos2(x, y), iw, more, Role::Sans, 13.0, th.muted, 1.45).bottom() + 20.0;
+            let br = Rect::from_min_size(pos2(x, y), vec2(iw, 36.0));
+            let mut bc = ui.new_child(egui::UiBuilder::new().max_rect(br).layout(egui::Layout::right_to_left(egui::Align::Min)));
+            bc.spacing_mut().item_spacing.x = 10.0;
+            if button(&mut bc, &th, "Update", Btn::Primary, true).on_hover_text(url.as_str()).clicked() {
+                act = Some(true);
+            }
+            if button(&mut bc, &th, "Not now", Btn::Secondary, true).clicked() {
+                act = Some(false);
+            }
+            if dim.clicked() {
+                act = Some(false);
+            }
+        });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            act = Some(false);
+        }
+        match act {
+            Some(true) => {
+                ctx.open_url(egui::OpenUrl::new_tab(url));
+                self.update_prompt = false;
+            }
+            Some(false) => self.update_prompt = false,
+            None => {}
         }
     }
 }
@@ -1267,6 +1576,10 @@ impl App {
                     i.click_chip(Row::Indices, 0);
                 }
                 "hbelsrc" => self.hbel.source_open = v == "1",
+                "update" if v == "1" || v == "ask" => {
+                    self.update.force(crate::update::Status::Available { tag: "3-Dec-2026".into(), url: "https://github.com/x/y/releases/tag/3-Dec-2026".into() });
+                    self.update_prompt = v == "ask";
+                }
                 "hbeladd" => self.hbel.demo_form(v == "2"),
                 _ => {}
             }

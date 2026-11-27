@@ -3,6 +3,7 @@
 mod app;
 mod chrome;
 mod cursor;
+mod excel;
 mod fonts;
 mod hbel_custom;
 mod hbel_data;
@@ -30,7 +31,7 @@ fn fox_icon() -> egui::IconData {
 fn main() -> eframe::Result<()> {
     // Only the first frame's size: after that the window fits the page.
     #[cfg_attr(not(feature = "screenshot"), allow(unused_mut))]
-    let mut size = [1014.0, 832.0];
+    let mut size = [1014.0, 1040.0];
     #[cfg(feature = "screenshot")]
     if let Ok(s) = std::env::var("HAEM_SIZE") {
         let v: Vec<f32> = s.split('x').filter_map(|p| p.parse().ok()).collect();

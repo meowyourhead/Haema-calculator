@@ -4,7 +4,8 @@
 //! this build's release date is the package version (`2026.11.26`). The check
 //! runs once, silently, on a background thread at start-up (and again when the
 //! user asks from the Theme menu). Nothing is shown unless a newer release
-//! exists; then the title bar offers a link to its download page. Nothing is
+//! exists; then the title bar shows "Update available". Clicking it asks the
+//! user to confirm before the release's download page is opened. Nothing is
 //! downloaded or installed automatically.
 use eframe::egui;
 use std::sync::{Arc, Mutex};
@@ -43,6 +44,14 @@ impl Default for Checker {
 impl Checker {
     pub fn status(&self) -> Status {
         self.state.lock().map(|s| s.clone()).unwrap_or(Status::Failed)
+    }
+
+    /// Screenshot harness: pretend the check found `s`.
+    #[cfg(feature = "screenshot")]
+    pub fn force(&self, s: Status) {
+        if let Ok(mut st) = self.state.lock() {
+            *st = s;
+        }
     }
 
     /// Start a check in the background (ignored while one is running).
