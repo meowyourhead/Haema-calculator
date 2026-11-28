@@ -4,7 +4,6 @@ use crate::hbel_custom;
 use crate::hbel_data::{library, visible, Entry, Group, Library, Link, Row, GROUPS, ROWS};
 use std::sync::Arc;
 use crate::hbel_match::{describe, hint, row_name, suggest, Eval, Inputs, NumState, Outcome, State};
-use crate::panels::toolbar;
 use crate::theme::{mix, rgba, Role, Theme};
 use crate::ui::*;
 use eframe::egui::{self, pos2, vec2, Align, Align2, Id, Layout, Pos2, Rect, Sense, Stroke, Ui, UiBuilder};
@@ -198,7 +197,7 @@ const SPLIT_INNER: f32 = 10.0;
 const SPLIT_MIN: f32 = 340.0;
 
 impl App {
-    /// The left column: toolbar, results, the new-comment form and the reference table.
+    /// The left column: results (with their actions), the new-comment form and the reference table.
     pub fn hbel_panel(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
         self.hbel_results(ui, th, origin, w)
     }
@@ -261,7 +260,8 @@ impl App {
         });
         ui.scope_builder(UiBuilder::new().max_rect(right), |ui| {
             egui::ScrollArea::vertical().id_salt(("hbel-right", self.hbel.source_open)).auto_shrink([false, false]).drag_to_scroll(false).show(ui, |ui| {
-                let o = ui.cursor().min + vec2(SPLIT_INNER, crate::app::PAGE_MARGIN);
+                // the view toggle row centres on the Results card's title bar
+                let o = ui.cursor().min + vec2(SPLIT_INNER, crate::app::PAGE_MARGIN + (HEAD_H - VIEW_H) / 2.0);
                 let w = (ui.available_width() - crate::app::PAGE_MARGIN - SPLIT_INNER).max(240.0);
                 let bottom = if self.hbel.source_open { self.hbel_source(ui, th, o, w) } else { self.hbel_suggestion(ui, th, o, w) };
                 let top = ui.cursor().min;
@@ -269,17 +269,6 @@ impl App {
             });
         });
         left_h
-    }
-
-    /// The right column's header: `title` on the left, buttons (drawn by `f`, right to left) on the right.
-    /// Returns the y below it.
-    fn hbel_head(ui: &mut Ui, th: &Theme, origin: Pos2, w: f32, title: &str, f: impl FnOnce(&mut Ui)) -> f32 {
-        text_ls(ui, th, pos2(origin.x, origin.y + 18.0), Align2::LEFT_CENTER, title, Role::Display, 18.0, th.text, -0.01);
-        let hr = Rect::from_min_max(pos2(origin.x + w - 400.0, origin.y), pos2(origin.x + w, origin.y + 36.0));
-        let mut hc = ui.new_child(UiBuilder::new().max_rect(hr).layout(Layout::right_to_left(Align::Min)));
-        hc.spacing_mut().item_spacing.x = 10.0;
-        f(&mut hc);
-        origin.y + 36.0 + 16.0
     }
 
     /// Copy feedback: the code whose Copy button should read "Copied".
@@ -307,22 +296,26 @@ impl App {
             None => "Choose the HBEL comments Excel file, then open it".to_string(),
         };
         let busy = self.excel_picker.busy();
-        let (mut back, mut excel) = (false, false);
-        Self::hbel_head(ui, th, origin, w, "Source sheet", |hc| {
-            back = button(hc, th, "Suggested comment", Btn::Secondary, true).on_hover_text("Close the sheet and show the suggested comment").clicked();
-            excel = button(hc, th, "Open Excel", Btn::Secondary, !busy).on_hover_text(tip).clicked();
-        });
-        if back {
-            self.hbel.source_open = false;
-        }
-        if excel {
+        // one row: view toggle · search · Open Excel
+        let toggle = view_toggle(ui, th, origin, &mut self.hbel.source_open);
+        let hr = Rect::from_min_max(pos2(toggle.right() + 12.0, origin.y), pos2(origin.x + w, origin.y + VIEW_H));
+        let mut hc = ui.new_child(UiBuilder::new().max_rect(hr).layout(Layout::right_to_left(Align::Min)));
+        let excel_r = button(&mut hc, th, "Open Excel", Btn::Secondary, !busy).on_hover_text(tip);
+        if excel_r.clicked() {
             let ctx = ui.ctx().clone();
             self.open_excel(&ctx);
         }
-        let sr = Rect::from_min_size(pos2(origin.x, origin.y + 36.0 + 14.0), vec2(w.min(460.0), FIELD_H));
-        text_field(ui, th, sr, Id::new("hbel-search"), &mut self.hbel.search, "Search comments, criteria, sample IDs…", false);
+        let room = excel_r.rect.left() - 10.0 - hr.left();
+        // too narrow for the search beside the toggle: it takes its own row
+        let sr = if room >= 170.0 {
+            let sw = room.min(420.0);
+            Rect::from_min_size(pos2(excel_r.rect.left() - 10.0 - sw, origin.y + (VIEW_H - FIELD_H) / 2.0), vec2(sw, FIELD_H))
+        } else {
+            Rect::from_min_size(pos2(origin.x, origin.y + VIEW_H + 12.0), vec2(w, FIELD_H))
+        };
+        text_field(ui, th, sr, Id::new("hbel-search"), &mut self.hbel.search, "Search comments…", false);
 
-        let mut y = sr.bottom() + 12.0;
+        let mut y = sr.bottom().max(origin.y + VIEW_H) + 16.0;
         if let Some(msg) = self.excel_msg.clone() {
             y = paragraph(ui, th, pos2(origin.x, y), w, &msg, Role::SansB, 13.0, th.bad, 1.4).bottom() + 10.0;
         }
@@ -344,9 +337,12 @@ impl App {
         if let Some(g) = pick {
             self.hbel.filter = g;
         }
-        y += CHIP_H + 12.0;
-        // the reference ranges table lives in the results view; only the links here
-        y = resource_links(ui, th, origin.x, y, w) + 18.0;
+        // the variant library link(s) close the filter row, right-aligned when they fit
+        let links_w: f32 = library().resources.iter().map(|l| text_width(ui, th, &format!("{} ↗", l.label), Role::SansB, 13.0)).sum::<f32>()
+            + 24.0 * library().resources.len().saturating_sub(1) as f32;
+        let (lx, ly) = if x + 16.0 + links_w <= origin.x + w { (origin.x + w - links_w, y + (CHIP_H - 18.0) / 2.0) } else { (origin.x, y + CHIP_H + 10.0) };
+        let lb = resource_links(ui, th, lx, ly, origin.x + w - lx);
+        y = (y + CHIP_H).max(lb) + 18.0;
 
         for err in self.hbel.folder_errors.clone() {
             y = note(ui, th, pos2(origin.x, y), Align2::LEFT_TOP, &format!("{}: {}", hbel_custom::FOLDER, err), w).bottom() + 8.0;
@@ -361,9 +357,6 @@ impl App {
         if shown.is_empty() {
             y = paragraph(ui, th, pos2(origin.x, y), w, "No comments match.", Role::Sans, 14.0, th.muted, 1.45).bottom();
         } else {
-            let n = format!("{} of {} comments · click a code to show it as the suggested comment", shown.len(), lib.entries.len());
-            let n = format!("{} · rows that fit the entered results move to the top, highlighted", n);
-            y = paragraph(ui, th, pos2(origin.x, y), w, &n, Role::Sans, 12.5, th.muted, 1.4).bottom() + 8.0;
             let (bottom, first) = source_table(ui, th, pos2(origin.x, y), w, &shown, &hl, n_hl, copied, &mut copy_req, &mut view_req);
             y = bottom;
             if hl != self.hbel.last_highlight {
@@ -389,17 +382,25 @@ impl App {
     fn hbel_results(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
         self.hbel.refresh_viewing();
         let lib = self.hbel.lib();
-        let mut clear = false;
-        let mut open_form = false;
         let form_open = self.hbel.form.is_some();
-        let mut y = toolbar(ui, origin, w, |ui| {
-            if button(ui, th, "Clear", Btn::Secondary, true).clicked() {
-                clear = true;
-            }
-            if button(ui, th, if form_open { "Cancel new" } else { "New comment" }, Btn::Secondary, true).on_hover_text("Add a new comment for a case no comment fits").clicked() {
-                open_form = true;
-            }
-        });
+        let mut y = origin.y;
+        if let Some(msg) = self.hbel.saved.clone() {
+            let r = chip(ui, th, pos2(origin.x, y), Align2::LEFT_TOP, &format!("✓ {}", msg), Role::SansB, 13.0, th.ok, th.ok_bg, Some((1.0, th.ok)), vec2(12.0, 6.0), th.radius);
+            y = r.bottom() + 14.0;
+        }
+
+        let gap = 16.0;
+        let opts = CardOpts { title: "Results", unit: "", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false, status: None, collapsed: false };
+        let inputs = &mut self.hbel.inputs;
+        let r_rect = card(ui, th, pos2(origin.x, y), w, &opts, |ui, iw| results_body(ui, th, iw, inputs));
+
+        // the card's own actions sit in its title bar, right-aligned
+        let hr = Rect::from_min_max(pos2(r_rect.left() + 120.0, r_rect.top()), pos2(r_rect.right() - 16.0, r_rect.top() + HEAD_H));
+        let mut hc = ui.new_child(UiBuilder::new().max_rect(hr).layout(Layout::right_to_left(Align::Center)));
+        hc.spacing_mut().item_spacing.x = 8.0;
+        let clear = button(&mut hc, th, "Clear", Btn::MiniMuted, true).on_hover_text("Clear every result").clicked();
+        let new_label = if form_open { "Cancel new" } else { "New comment" };
+        let open_form = button(&mut hc, th, new_label, Btn::Mini, true).on_hover_text("Add a new comment for a case no comment fits").clicked();
         if clear {
             self.hbel.clear();
         }
@@ -407,15 +408,6 @@ impl App {
             self.hbel.form = if form_open { None } else { Some(NewForm { scroll_to: true, ..Default::default() }) };
             self.hbel.saved = None;
         }
-        if let Some(msg) = self.hbel.saved.clone() {
-            let r = chip(ui, th, pos2(origin.x, y), Align2::LEFT_TOP, &format!("✓ {}", msg), Role::SansB, 13.0, th.ok, th.ok_bg, Some((1.0, th.ok)), vec2(12.0, 6.0), th.radius);
-            y = r.bottom() + 14.0;
-        }
-
-        let gap = 16.0;
-        let opts = CardOpts { title: "Results", unit: "blank rows match anything", bar: None, head_bg: None, title_color: None, chip: None, min_height: 0.0, alert: false, status: None, collapsed: false };
-        let inputs = &mut self.hbel.inputs;
-        let r_rect = card(ui, th, pos2(origin.x, y), w, &opts, |ui, iw| results_body(ui, th, iw, inputs));
 
         let mut bottom = r_rect.bottom();
         if self.hbel.form.is_some() {
@@ -427,14 +419,8 @@ impl App {
     /// The right column when the source sheet is closed: the suggested comment.
     pub fn hbel_suggestion(&mut self, ui: &mut Ui, th: &Theme, origin: Pos2, w: f32) -> f32 {
         let lib = self.hbel.lib();
-        let mut open_src = false;
-        // button row level with the left column's toolbar, so the cards line up
-        let y = Self::hbel_head(ui, th, origin, w, "", |hc| {
-            open_src = button(hc, th, "Source sheet", Btn::Secondary, true).on_hover_text("Show the full comment sheet here instead").clicked();
-        });
-        if open_src {
-            self.hbel.source_open = true;
-        }
+        // the view toggle heads the column
+        let y = view_toggle(ui, th, origin, &mut self.hbel.source_open).bottom() + 16.0;
         let sug = suggest(&lib, &self.hbel.inputs);
         let viewing = self.hbel.viewing();
         let copied = self.hbel_copied(ui);
@@ -641,7 +627,7 @@ fn band_pills(ui: &Ui, th: &Theme, pos: Pos2, w: f32, row: Row, inputs: &Inputs,
     y + BAND_H - pos.y
 }
 
-/// Reference ranges as a small table, then the tab-wide links. Bands that the
+/// Reference ranges as a small table. Bands that the
 /// entered HbA2 / HbF fall in are highlighted. Returns the bottom y.
 pub(crate) fn footer(ui: &mut Ui, th: &Theme, x: f32, y: f32, w: f32, inputs: &Inputs) -> f32 {
     let head_size = 10.88;
@@ -696,7 +682,7 @@ pub(crate) fn footer(ui: &mut Ui, th: &Theme, x: f32, y: f32, w: f32, inputs: &I
     }
     stroke_in(&p, frame, rad, if th.palette == crate::theme::Palette::Pokemon { 2.0 } else { 1.0 }, th.line);
     ui.allocate_rect(frame, Sense::hover());
-    resource_links(ui, th, x, frame.bottom() + 12.0, w)
+    frame.bottom()
 }
 
 /// The tab-wide links (Bio-Rad variant library, …), wrapping within `w`. Returns the bottom y.
@@ -716,6 +702,72 @@ pub(crate) fn resource_links(ui: &mut Ui, th: &Theme, x: f32, y: f32, w: f32) ->
     }
     ui.allocate_rect(Rect::from_min_max(pos2(x, y), pos2(x + w, bottom)), Sense::hover());
     bottom
+}
+
+/// Height of the right column's header row (view toggle, search, Open Excel).
+const VIEW_H: f32 = 36.0;
+
+/// One control that switches the right column between the suggested comment
+/// and the source sheet. The filled thumb slides to the chosen side.
+/// Returns its rect.
+fn view_toggle(ui: &mut Ui, th: &Theme, pos: Pos2, source_open: &mut bool) -> Rect {
+    use crate::theme::Palette;
+    let names = ["Suggested comment", "Source sheet"];
+    let pad = 16.0;
+    let ws = names.map(|n| text_width(ui, th, n, Role::SansB, 13.44).ceil() + 2.0 * pad);
+    let rect = Rect::from_min_size(pos, vec2(ws[0] + ws[1], VIEW_H));
+    let p = ui.painter().clone();
+    let r = match th.palette {
+        Palette::Genshin => pill(),
+        Palette::Pokemon => 14.0,
+        Palette::Cyberpunk => 0.0,
+        _ => th.radius,
+    };
+    let border = match th.palette {
+        Palette::Pokemon => th.ring,
+        Palette::Genshin => rgba(th.gold, 0.45),
+        Palette::Cyberpunk => rgba(th.accent, 0.62),
+        _ => th.line,
+    };
+    if th.palette == Palette::Cyberpunk {
+        cyber_panel(&p, rect, 4.0, th.surface2, 1.0, border);
+    } else {
+        fill(&p, rect, r, th.surface2);
+    }
+    // thumb: slides between the halves, inset so the track shows around it
+    let t = ui.ctx().animate_bool_with_time(Id::new("hbel-view-toggle"), *source_open, 0.16);
+    let inset = 3.0;
+    let tw = ws[0] + t * (ws[1] - ws[0]);
+    let thumb = Rect::from_min_size(pos2(rect.left() + inset + t * ws[0], rect.top() + inset), vec2(tw - 2.0 * inset, VIEW_H - 2.0 * inset));
+    let tr = if r >= pill() { pill() } else { (r - inset).max(0.0) };
+    if th.palette == Palette::Cyberpunk {
+        cyber_panel(&p, thumb, 3.0, th.accent, 0.0, th.accent);
+    } else {
+        fill(&p, thumb, tr, th.accent);
+    }
+    for (i, name) in names.iter().enumerate() {
+        let hr = Rect::from_min_size(pos2(rect.left() + if i == 0 { 0.0 } else { ws[0] }, rect.top()), vec2(ws[i], VIEW_H));
+        let want = i == 1;
+        let tip = if want { "Show the full comment sheet" } else { "Show the comment that fits the entered results" };
+        let resp = ui.interact(hr, Id::new(("hbel-view", i)), Sense::click()).on_hover_text(tip);
+        if resp.hovered() && *source_open != want {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() {
+            *source_open = want;
+        }
+        // label colour follows the thumb, so it crossfades as it slides
+        let on = if want { t } else { 1.0 - t };
+        let off_c = if resp.hovered() { th.text } else { th.muted };
+        text(ui, th, hr.center(), Align2::CENTER_CENTER, name, Role::SansB, 13.44, mix(on, th.on_accent, off_c));
+    }
+    if th.palette == Palette::Cyberpunk {
+        cyber_stroke(&p, rect, 4.0, 1.0, border);
+    } else {
+        stroke_in(&p, rect, r, 1.0, border);
+    }
+    ui.allocate_rect(rect, Sense::hover());
+    rect
 }
 
 fn results_body(ui: &mut Ui, th: &Theme, iw: f32, inputs: &mut Inputs) {
