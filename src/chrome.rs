@@ -126,8 +126,13 @@ fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
     // --- "Update available" (only once the silent check found a newer release)
     let mut drag_right = theme_btn.left();
     if let crate::update::Status::Available { tag, .. } = app.update.status() {
-        let label = "Update available";
-        let uw = text_width(ui, th, label, Role::SansB, 12.0).ceil() + 30.0;
+        let label = match app.update.install_status() {
+            crate::update::Install::Downloading { done, total } if total > 0 => format!("Updating {}%", (done * 100 / total).min(100)),
+            crate::update::Install::Downloading { .. } | crate::update::Install::Restarting => "Updating…".to_string(),
+            _ => "Update available".to_string(),
+        };
+        let label = label.as_str();
+        let uw = text_width(ui, th, "Update available", Role::SansB, 12.0).ceil().max(text_width(ui, th, label, Role::SansB, 12.0).ceil()) + 30.0;
         let ur = Rect::from_min_max(pos2(theme_btn.left() - 8.0 - uw, theme_btn.top() + 3.0), pos2(theme_btn.left() - 8.0, theme_btn.bottom() - 3.0));
         // only where it does not cover the tabs
         if ur.left() > tabs_right + 8.0 {
@@ -145,7 +150,10 @@ fn paint_chrome(ui: &mut Ui, app: &mut App, th: &Theme) {
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            let resp = resp.on_hover_text(format!("Version {} is out. Click to update (you are asked first).", crate::update::display(&tag)));
+            let resp = resp.on_hover_text(match app.update.install_status() {
+                crate::update::Install::Downloading { .. } | crate::update::Install::Restarting => format!("Downloading version {}. Click to see progress.", crate::update::display(&tag)),
+                _ => format!("Version {} is out. Click to update (you are asked first).", crate::update::display(&tag)),
+            });
             if resp.clicked() {
                 app.menu_open = false;
                 app.update_prompt = true;

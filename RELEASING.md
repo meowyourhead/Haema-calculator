@@ -39,6 +39,20 @@ version is not bumped tells users its own release is an update.
 The update checker reads `https://api.github.com/repos/meowyourhead/Haema-calculator/releases/latest`
 without logging in, so it only works while the repository is public.
 
+## How users receive a release
+
+When a user approves an update, the app downloads the **first `.exe` attached
+to the latest release**, checks it is complete (size matches, `MZ` header),
+renames the running EXE to `<name>.old-<time>.exe`, puts the new one in its
+place under the same name, starts it and closes. Old copies are deleted on a
+later start. So:
+
+- attach exactly one `.exe` to every release (the one built for that date);
+- never attach a broken or test build: every user who clicks "Update and
+  restart" installs it;
+- users without write permission to the app's folder get an error and the
+  release page instead; nothing is replaced for them.
+
 ## Release checklist
 
 0. Set `version` in `Cargo.toml` to the release date (see above).

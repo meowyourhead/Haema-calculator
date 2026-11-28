@@ -149,6 +149,7 @@ impl App {
         let check = true;
         if check {
             app.update.start(&cc.egui_ctx);
+            crate::update::cleanup_old();
         }
         app
     }
@@ -754,6 +755,18 @@ impl eframe::App for App {
         if self.update_prompt {
             self.update_dialog(ctx);
         }
+        // developer test: HAEM_AUTOUPDATE=1 approves an available update unasked
+        #[cfg(feature = "screenshot")]
+        if std::env::var("HAEM_AUTOUPDATE").is_ok_and(|v| v == "1") && self.update.install_status() == crate::update::Install::Idle {
+            if let crate::update::Status::Available { asset: Some(a), .. } = self.update.status() {
+                self.update.begin_install(ctx, a);
+                self.update_prompt = true;
+            }
+        }
+        // an approved update is in place and the new version has started
+        if self.update.install_status() == crate::update::Install::Restarting {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
 
         // Theme mascots: roam the perches registered above.
         self.pika.tick(ctx, &th, self.mascots && self.palette == Palette::Pokemon);
@@ -1308,9 +1321,11 @@ impl App {
         // --- updates
         let rect = Rect::from_min_size(pos2(origin.x, y), vec2(w, toggle_h));
         let status = self.update.status();
+        let installing = matches!(self.update.install_status(), crate::update::Install::Downloading { .. } | crate::update::Install::Restarting);
         let this_s = format!("This version: {}", crate::update::date_label(crate::update::current()));
         let resp = side_toggle(ui, th, rect, Id::new("update-check"), false);
         let resp = match &status {
+            _ if installing => resp.on_hover_text(format!("{}\nClick to see the update's progress", this_s)),
             crate::update::Status::Available { .. } => resp.on_hover_text(format!("{}\nClick to update (you are asked first)", this_s)),
             _ => resp.on_hover_text(format!("{}\nClick to check GitHub for a newer release", this_s)),
         };
@@ -1325,15 +1340,20 @@ impl App {
         p.add(egui::Shape::convex_polygon(vec![tip + vec2(-3.0, -1.5), tip + vec2(2.0, -2.5), tip + vec2(0.5, 2.5)], fgc, Stroke::NONE));
         text(ui, th, pos2(icon_c.x + 12.0, rect.center().y), Align2::LEFT_CENTER, "Updates", Role::Sans, 13.0, fgc);
         let (msg, mc) = match &status {
+            _ if installing => ("Updating…".to_string(), if th.palette == Palette::Genshin { hex(0xd3bc8e) } else { th.accent }),
             crate::update::Status::Idle => ("Check now".to_string(), rgba(fgc, 0.65)),
             crate::update::Status::Checking => ("Checking…".to_string(), rgba(fgc, 0.65)),
             crate::update::Status::UpToDate => ("Up to date".to_string(), if th.palette == Palette::Genshin { hex(0x9fd39a) } else { th.ok }),
             crate::update::Status::Failed => ("Couldn't check".to_string(), rgba(fgc, 0.65)),
-            crate::update::Status::Available { tag, .. } => (format!("{} ↗", crate::update::display(tag)), if th.palette == Palette::Genshin { hex(0xd3bc8e) } else { th.accent }),
+            crate::update::Status::Available { tag, .. } => (format!("{} available", crate::update::display(tag)), if th.palette == Palette::Genshin { hex(0xd3bc8e) } else { th.accent }),
         };
         text(ui, th, pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, &msg, Role::SansB, 11.5, mc);
         if resp.clicked() {
             match status {
+                _ if installing => {
+                    self.menu_open = false;
+                    self.update_prompt = true;
+                }
                 crate::update::Status::Available { .. } => {
                     self.menu_open = false;
                     self.update_prompt = true;
@@ -1344,35 +1364,82 @@ impl App {
         }
     }
 
-    /// "Update now?": asks before anything is done about a newer release.
-    /// Only "Update" opens the release's download page; "Not now", Esc or a
-    /// click outside close it.
+    /// The update dialog. Before anything happens it asks "Update and
+    /// restart?"; once approved it shows the download's progress (the app
+    /// then restarts on its own), or why it failed with the release's download
+    /// page as the way out. Esc or a click outside hides it (a running
+    /// download carries on; the title bar and Settings reopen it).
     fn update_dialog(&mut self, ctx: &egui::Context) {
-        let crate::update::Status::Available { tag, url } = self.update.status() else {
+        use crate::update::Install;
+        let crate::update::Status::Available { tag, url, asset } = self.update.status() else {
             self.update_prompt = false;
             return;
         };
+        let install = self.update.install_status();
         let th = self.theme();
         let screen = ctx.screen_rect();
-        let w = 400.0_f32.min(screen.width() - 32.0);
+        let w = 420.0_f32.min(screen.width() - 32.0);
         let pad = 22.0;
-        let mut act: Option<bool> = None;
+        /// What a dialog button does.
+        #[derive(Clone, Copy, PartialEq)]
+        enum Act {
+            Install,
+            OpenPage,
+            Cancel,
+            Hide,
+            Close,
+        }
+        let new_s = crate::update::display(&tag);
+        let cur_s = crate::update::date_label(crate::update::current());
+        let mb = |b: u64| format!("{:.1}", b as f64 / 1_048_576.0);
+        // title, main line, secondary line, progress (0–1, or -1 when the size is unknown), buttons (first = primary)
+        let (title, body, more, progress, buttons): (String, String, String, Option<f32>, Vec<(&str, Act)>) = match (&install, &asset) {
+            (Install::Downloading { done, total }, _) => (
+                format!("Updating to {}", new_s),
+                if *total > 0 { format!("Downloading… {} of {} MB", mb(*done), mb(*total)) } else { format!("Downloading… {} MB", mb(*done)) },
+                "The app restarts on its own when the download finishes.".into(),
+                Some(if *total > 0 { (*done as f32 / *total as f32).clamp(0.0, 1.0) } else { -1.0 }),
+                vec![("Hide", Act::Hide), ("Cancel update", Act::Cancel)],
+            ),
+            (Install::Restarting, _) => (format!("Updating to {}", new_s), "Restarting…".into(), String::new(), Some(1.0), vec![]),
+            (Install::Failed(msg), _) => (
+                "Update didn't finish".into(),
+                msg.clone(),
+                "You can still download the new version from its release page and replace the app yourself.".into(),
+                None,
+                vec![("Open download page", Act::OpenPage), ("Close", Act::Close)],
+            ),
+            (Install::Idle, Some(_)) => (
+                "Update available".into(),
+                format!("Version {} is available (you have {}).", new_s, cur_s),
+                "The new version downloads, replaces this one and the app restarts on its own. Results you have entered are cleared.".into(),
+                None,
+                vec![("Update and restart", Act::Install), ("Not now", Act::Close)],
+            ),
+            (Install::Idle, None) => (
+                "Update available".into(),
+                format!("Version {} is available (you have {}).", new_s, cur_s),
+                "This release can't be installed from here. Its download page opens in your browser.".into(),
+                None,
+                vec![("Open download page", Act::OpenPage), ("Not now", Act::Close)],
+            ),
+        };
+        let busy = matches!(install, Install::Downloading { .. } | Install::Restarting);
+        if busy {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        let mut act: Option<Act> = None;
         egui::Area::new(Id::new("update-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
-            // dim the page; a click on it is "Not now"
+            // dim the page; a click on it hides the dialog
             let dim = ui.allocate_rect(screen, Sense::click());
             let p = ui.painter().clone();
             p.rect_filled(screen, 0.0, Color32::from_black_alpha(if th.dark { 130 } else { 90 }));
             let fg = th.text;
-            let new_s = crate::update::display(&tag);
-            let cur_s = crate::update::date_label(crate::update::current());
-            let body = format!("Version {} is available (you have {}).", new_s, cur_s);
-            let more = "Update now? The download page for the new version opens in your browser. Nothing changes in this app until you install it.";
             let iw = w - 2.0 * pad;
-            let h = pad + 26.0 + 12.0
-                + paragraph_height(ui, &th, iw, &body, Role::Sans, 14.0, 1.45)
-                + 8.0
-                + paragraph_height(ui, &th, iw, more, Role::Sans, 13.0, 1.45)
-                + 20.0 + 36.0 + pad;
+            let more_h = if more.is_empty() { 0.0 } else { 8.0 + paragraph_height(ui, &th, iw, &more, Role::Sans, 13.0, 1.45) };
+            let bar_h = if progress.is_some() { 14.0 + 6.0 } else { 0.0 };
+            let btn_h = if buttons.is_empty() { 0.0 } else { 20.0 + 36.0 };
+            let h = pad + 26.0 + 12.0 + paragraph_height(ui, &th, iw, &body, Role::Sans, 14.0, 1.45) + bar_h + more_h + btn_h + pad;
             let r = Rect::from_center_size(screen.center(), vec2(w, h));
             // the panel itself swallows clicks so they do not reach the dim layer
             let _ = ui.interact(r, Id::new("update-dialog-panel"), Sense::click());
@@ -1386,32 +1453,68 @@ impl App {
             }
             let x = r.left() + pad;
             let mut y = r.top() + pad;
-            text_ls(ui, &th, pos2(x, y + 13.0), Align2::LEFT_CENTER, "Update available", Role::Display, 19.0, fg, -0.01);
+            text_ls(ui, &th, pos2(x, y + 13.0), Align2::LEFT_CENTER, &title, Role::Display, 19.0, fg, -0.01);
             y += 26.0 + 12.0;
-            y = paragraph(ui, &th, pos2(x, y), iw, &body, Role::Sans, 14.0, fg, 1.45).bottom() + 8.0;
-            y = paragraph(ui, &th, pos2(x, y), iw, more, Role::Sans, 13.0, th.muted, 1.45).bottom() + 20.0;
-            let br = Rect::from_min_size(pos2(x, y), vec2(iw, 36.0));
-            let mut bc = ui.new_child(egui::UiBuilder::new().max_rect(br).layout(egui::Layout::right_to_left(egui::Align::Min)));
-            bc.spacing_mut().item_spacing.x = 10.0;
-            if button(&mut bc, &th, "Update", Btn::Primary, true).on_hover_text(url.as_str()).clicked() {
-                act = Some(true);
+            y = paragraph(ui, &th, pos2(x, y), iw, &body, Role::Sans, 14.0, fg, 1.45).bottom();
+            if let Some(f) = progress {
+                // track + fill; an unknown size sweeps a short segment back and forth
+                let track = Rect::from_min_size(pos2(x, y + 14.0), vec2(iw, 6.0));
+                let accent = if th.palette == Palette::Genshin { th.gold } else { th.accent };
+                fill(&p, track, 3.0, th.surface2);
+                let seg = if f >= 0.0 {
+                    Rect::from_min_size(track.min, vec2(iw * f, 6.0))
+                } else {
+                    let t = (ui.input(|i| i.time) as f32 * 0.8).fract();
+                    let s = (if t < 0.5 { t * 2.0 } else { 2.0 - t * 2.0 }) * iw * 0.75;
+                    Rect::from_min_size(pos2(x + s, track.top()), vec2(iw * 0.25, 6.0))
+                };
+                if seg.width() > 0.5 {
+                    fill(&p, seg, 3.0, accent);
+                }
+                y = track.bottom();
             }
-            if button(&mut bc, &th, "Not now", Btn::Secondary, true).clicked() {
-                act = Some(false);
+            if !more.is_empty() {
+                y = paragraph(ui, &th, pos2(x, y + 8.0), iw, &more, Role::Sans, 13.0, th.muted, 1.45).bottom();
+            }
+            if !buttons.is_empty() {
+                let br = Rect::from_min_size(pos2(x, y + 20.0), vec2(iw, 36.0));
+                let mut bc = ui.new_child(egui::UiBuilder::new().max_rect(br).layout(egui::Layout::right_to_left(egui::Align::Min)));
+                bc.spacing_mut().item_spacing.x = 10.0;
+                for (k, (label, a)) in buttons.iter().enumerate() {
+                    let kind = if k == 0 && !matches!(a, Act::Hide) { Btn::Primary } else { Btn::Secondary };
+                    let mut resp = button(&mut bc, &th, label, kind, true);
+                    if *a == Act::OpenPage {
+                        resp = resp.on_hover_text(url.as_str());
+                    }
+                    if resp.clicked() {
+                        act = Some(*a);
+                    }
+                }
             }
             if dim.clicked() {
-                act = Some(false);
+                act = Some(if busy { Act::Hide } else { Act::Close });
             }
         });
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            act = Some(false);
+        if act.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            act = Some(if busy { Act::Hide } else { Act::Close });
         }
         match act {
-            Some(true) => {
+            Some(Act::Install) => {
+                if let Some(a) = asset {
+                    self.update.begin_install(ctx, a);
+                }
+            }
+            Some(Act::OpenPage) => {
                 ctx.open_url(egui::OpenUrl::new_tab(url));
+                self.update.dismiss_install();
                 self.update_prompt = false;
             }
-            Some(false) => self.update_prompt = false,
+            Some(Act::Cancel) => self.update.cancel_install(),
+            Some(Act::Hide) => self.update_prompt = false,
+            Some(Act::Close) => {
+                self.update.dismiss_install();
+                self.update_prompt = false;
+            }
             None => {}
         }
     }
@@ -1576,9 +1679,16 @@ impl App {
                     i.click_chip(Row::Indices, 0);
                 }
                 "hbelsrc" => self.hbel.source_open = v == "1",
-                "update" if v == "1" || v == "ask" => {
-                    self.update.force(crate::update::Status::Available { tag: "3-Dec-2026".into(), url: "https://github.com/x/y/releases/tag/3-Dec-2026".into() });
-                    self.update_prompt = v == "ask";
+                // update=1 (title bar), ask (dialog), dl (downloading), fail (failed)
+                "update" if matches!(v, "1" | "ask" | "dl" | "fail") => {
+                    let asset = crate::update::Asset { url: "https://github.com/x/y/releases/download/3-Dec-2026/app.exe".into(), size: 9_800_000 };
+                    self.update.force(crate::update::Status::Available { tag: "3-Dec-2026".into(), url: "https://github.com/x/y/releases/tag/3-Dec-2026".into(), asset: Some(asset) });
+                    self.update_prompt = v != "1";
+                    match v {
+                        "dl" => self.update.force_install(crate::update::Install::Downloading { done: 4_200_000, total: 9_800_000 }),
+                        "fail" => self.update.force_install(crate::update::Install::Failed("Couldn't save the update in the app's folder. You may not have permission to change files there.".into())),
+                        _ => {}
+                    }
                 }
                 "hbeladd" => self.hbel.demo_form(v == "2"),
                 _ => {}
